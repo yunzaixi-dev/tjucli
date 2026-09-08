@@ -1,0 +1,6 @@
+bin/
+data/
+.env
+.env.*
+*.log
+course-readme.md

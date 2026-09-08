@@ -9,10 +9,10 @@ From the repository root:
 ```sh
 rtk task cli:build
 rtk task cli:test
-rtk proxy backend/bin/tjucli capabilities --json
+rtk proxy bin/tjucli capabilities --json
 ```
 
-The binary is written to ignored `backend/bin/` and embeds the root package version.
+The binary is written to ignored `bin/` and embeds the root package version.
 For Pi usage, see `skills/tjucli/SKILL.md`; product runtime integration is still pending.
 
 ## Commands

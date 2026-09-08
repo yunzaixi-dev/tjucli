@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.tju.edu.cn/3023244020/agent2026-tjuclaw/backend/internal/tjucli"
+	"github.com/yunzaixi-dev/tjucli/internal/tjucli"
 )
 
 type fakeProvider struct {

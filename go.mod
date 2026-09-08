@@ -1,3 +1,3 @@
-module gitlab.tju.edu.cn/3023244020/agent2026-tjuclaw/backend
+module github.com/yunzaixi-dev/tjucli
 
 go 1.26.0

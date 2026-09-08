@@ -1,0 +1,45 @@
+version: '3'
+
+tasks:
+  check:
+    desc: Run formatting, vet and race tests
+    cmds:
+      - task: fmt:check
+      - task: lint
+      - task: test
+
+  fmt:
+    desc: Format Go source
+    cmds: [go fmt ./...]
+
+  fmt:check:
+    desc: Check Go formatting
+    cmds:
+      - test -z "$(gofmt -l .)" || (echo "Unformatted files:" && gofmt -l . && exit 1)
+
+  lint:
+    desc: Run go vet
+    cmds: [go vet ./...]
+
+  test:
+    desc: Run tests with race detector
+    cmds: [go test -race ./...]
+
+  build:
+    desc: Build tjucli executable with package version
+    vars:
+      CLI_VERSION:
+        sh: node -p 'require("./package.json").version'
+    cmds:
+      - mkdir -p bin
+      - go build -trimpath -ldflags="-X main.version={{.CLI_VERSION}}" -o bin/tjucli ./cmd/tjucli
+
+  cli:build:
+    desc: Build tjucli executable
+    cmds:
+      - task: build
+
+  cli:test:
+    desc: Test the campus CLI and public course provider
+    cmds:
+      - task: test
