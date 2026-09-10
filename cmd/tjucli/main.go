@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/yunzaixi-dev/tjucli/internal/remote"
 	"github.com/yunzaixi-dev/tjucli/internal/tjucli"
 )
 
@@ -32,15 +33,37 @@ type runner struct {
 }
 
 func main() {
-	provider, err := tjucli.NewProvider()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "tjucli: provider initialization failed")
-		os.Exit(1)
-	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := (&runner{provider: provider, stdout: os.Stdout, stderr: os.Stderr}).run(ctx, os.Args[1:])
+	code := (&runner{stdout: os.Stdout, stderr: os.Stderr}).run(ctx, os.Args[1:])
 	stop()
 	os.Exit(code)
+}
+
+func (r *runner) getProvider() (courseProvider, *tjucli.CLIError) {
+	if r.provider != nil {
+		return r.provider, nil
+	}
+
+	mode := strings.TrimSpace(os.Getenv("TJUCLI_MODE"))
+	switch mode {
+	case "", "local", "direct":
+		provider, err := tjucli.NewProvider()
+		if err != nil {
+			return nil, tjucli.NewRuntimeError("provider_error", "provider initialization failed")
+		}
+		r.provider = provider
+		return provider, nil
+	case "remote":
+		cfg, loadErr := remote.LoadConfig()
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		client := remote.NewClient(cfg)
+		r.provider = client
+		return client, nil
+	default:
+		return nil, tjucli.NewRuntimeError("configuration_error", fmt.Sprintf("unrecognized TJUCLI_MODE: %s", mode))
+	}
 }
 
 func (r *runner) run(ctx context.Context, args []string) int {
@@ -136,7 +159,11 @@ func (r *runner) runList(ctx context.Context, args []string, jsonOutput bool) in
 	if len(positional) == 1 {
 		providerPath = positional[0]
 	}
-	data, meta, listErr := r.provider.List(ctx, providerPath, options["cursor"])
+	provider, provErr := r.getProvider()
+	if provErr != nil {
+		return r.fail(jsonOutput, provErr)
+	}
+	data, meta, listErr := provider.List(ctx, providerPath, options["cursor"])
 	if listErr != nil {
 		return r.fail(jsonOutput, listErr)
 	}
@@ -172,7 +199,11 @@ func (r *runner) runSearch(ctx context.Context, args []string, jsonOutput bool) 
 	if numberErr != nil {
 		return r.fail(jsonOutput, numberErr)
 	}
-	data, meta, searchErr := r.provider.Search(ctx, positional[0], maxPages, limit)
+	provider, provErr := r.getProvider()
+	if provErr != nil {
+		return r.fail(jsonOutput, provErr)
+	}
+	data, meta, searchErr := provider.Search(ctx, positional[0], maxPages, limit)
 	if searchErr != nil {
 		return r.fail(jsonOutput, searchErr)
 	}
@@ -205,7 +236,11 @@ func (r *runner) runDownload(ctx context.Context, args []string, jsonOutput bool
 	if numberErr != nil {
 		return r.fail(jsonOutput, numberErr)
 	}
-	data, downloadErr := r.provider.Download(ctx, positional[0], options["output"], maxBytes)
+	provider, provErr := r.getProvider()
+	if provErr != nil {
+		return r.fail(jsonOutput, provErr)
+	}
+	data, downloadErr := provider.Download(ctx, positional[0], options["output"], maxBytes)
 	if downloadErr != nil {
 		return r.fail(jsonOutput, downloadErr)
 	}

@@ -13,11 +13,13 @@ rtk task check
 rtk task build
 ```
 
-Binary is output to `bin/tjucli`.
+Binary outputs are `bin/tjucli` and `bin/tjucli-server`.
+For remote tool calls and scoped grant configuration, see [TOOL_SERVER.md](TOOL_SERVER.md).
+The HTTP service is an integration building block; product Pi/cloud sandbox execution remains pending.
 You can also build directly using Go:
 
 ```bash
-go build -trimpath -ldflags="-X main.version=0.0.25" -o bin/tjucli ./cmd/tjucli
+go build -trimpath -ldflags="-X main.version=$(node -p 'require("./package.json").version')" -o bin/tjucli ./cmd/tjucli
 ```
 
 ## Usage & Commands

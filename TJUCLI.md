@@ -40,6 +40,12 @@ All commands accept `--json`, including after a subcommand or positional argumen
 
 Invalid command arguments exit with status 2. Provider, protocol, download, and filesystem failures exit with status 1. Human-readable diagnostics are written to standard error.
 
+## Remote mode
+
+Set `TJUCLI_MODE=remote`, `TJUCLI_SERVER_URL` and `TJUCLI_TOKEN_FILE` for authenticated tool-server calls. See [TOOL_SERVER.md](TOOL_SERVER.md) for the grant and HTTP contract. The command/output syntax stays the same; the output path belongs to the CLI workspace and is never sent to the server. Remote mode confines downloads to the current working directory and caps downloads at the server's 64 MiB limit. Redirects to the tool server are rejected. Failures do not fall back to direct mode.
+
+The standalone default remains local; the redirect and 1 GiB rules below describe that direct provider mode. `version` and help do not require remote credentials.
+
 ## Safety boundaries
 
 Provider paths are normalized to a leading slash and reject traversal segments, backslashes, control characters, and invalid UTF-8. Catalog response sizes and request duration are bounded.

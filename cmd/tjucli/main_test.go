@@ -156,3 +156,61 @@ func TestVersionCapabilitiesAndHelp(t *testing.T) {
 		}
 	}
 }
+
+func TestMetadataWorksWithoutRemoteEnv(t *testing.T) {
+	t.Setenv("TJUCLI_MODE", "remote")
+	t.Setenv("TJUCLI_SERVER_URL", "")
+	t.Setenv("TJUCLI_TOKEN_FILE", "")
+
+	for _, args := range [][]string{
+		{"version"},
+		{"version", "--json"},
+		{"capabilities"},
+		{"capabilities", "--json"},
+		{"help"},
+		{"--help"},
+		{"course", "--help"},
+	} {
+		stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+		code := (&runner{stdout: stdout, stderr: stderr}).run(context.Background(), args)
+		if code != 0 {
+			t.Fatalf("expected 0 for %v with unset remote env, got %d, stderr=%q", args, code, stderr.String())
+		}
+	}
+}
+
+func TestRemoteModeFailureWhenMissingConfig(t *testing.T) {
+	t.Setenv("TJUCLI_MODE", "remote")
+	t.Setenv("TJUCLI_SERVER_URL", "")
+	t.Setenv("TJUCLI_TOKEN_FILE", "")
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	code := (&runner{stdout: stdout, stderr: stderr}).run(context.Background(), []string{"course", "ls", "--json"})
+	if code != 1 {
+		t.Fatalf("expected exit code 1, got %d", code)
+	}
+	var env tjucli.FailureEnvelope
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.OK || env.Error.Code != "configuration_error" {
+		t.Fatalf("expected configuration_error, got %#v", env)
+	}
+}
+
+func TestInvalidTJUCliModeFails(t *testing.T) {
+	t.Setenv("TJUCLI_MODE", "unknown-mode")
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	code := (&runner{stdout: stdout, stderr: stderr}).run(context.Background(), []string{"course", "ls", "--json"})
+	if code != 1 {
+		t.Fatalf("expected exit code 1, got %d", code)
+	}
+	var env tjucli.FailureEnvelope
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.OK || env.Error.Code != "configuration_error" {
+		t.Fatalf("expected configuration_error, got %#v", env)
+	}
+}

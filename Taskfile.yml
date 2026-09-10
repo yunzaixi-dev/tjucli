@@ -26,13 +26,18 @@ tasks:
     cmds: [go test -race ./...]
 
   build:
-    desc: Build tjucli executable with package version
+    desc: Build CLI and internal tool server
     vars:
       CLI_VERSION:
         sh: node -p 'require("./package.json").version'
     cmds:
       - mkdir -p bin
       - go build -trimpath -ldflags="-X main.version={{.CLI_VERSION}}" -o bin/tjucli ./cmd/tjucli
+      - go build -trimpath -o bin/tjucli-server ./cmd/tjucli-server
+
+  server:dev:
+    desc: Run internal tool server with a configured grants file
+    cmds: [go run ./cmd/tjucli-server]
 
   cli:build:
     desc: Build tjucli executable

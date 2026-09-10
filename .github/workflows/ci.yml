@@ -20,7 +20,7 @@ env:
 
 jobs:
   check-and-test:
-    name: Check, test, and build tjucli
+    name: Check, test, and build CLI and tool server
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -60,6 +60,7 @@ jobs:
           CLI_VER=$(node -e "console.log(require('./package.json').version)")
           mkdir -p bin
           go build -trimpath -ldflags="-X main.version=${CLI_VER}" -o bin/tjucli ./cmd/tjucli
+          go build -trimpath -o bin/tjucli-server ./cmd/tjucli-server
 
       - name: Verify binary output
         run: |
@@ -69,6 +70,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: tjucli-${{ github.sha }}
-          path: bin/tjucli
+          path: |
+            bin/tjucli
+            bin/tjucli-server
           if-no-files-found: error
           retention-days: 7

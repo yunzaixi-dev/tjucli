@@ -1,7 +1,7 @@
 ---
 name: tjucli
 description: Queries Tianjin University course-sharing directories and downloads public course materials with tjucli. Use when users ask to find course notes, browse shared materials, or download a course resource to their workspace.
-compatibility: Requires the tjucli executable on PATH, HTTPS access to the course-sharing provider, and a writable user workspace.
+compatibility: Requires tjucli on PATH and a writable workspace; remote mode requires provisioned tool-server configuration, local mode requires HTTPS access to the course provider.
 ---
 
 # TJUClaw campus CLI
@@ -17,6 +17,10 @@ tjucli course --help
 Current commands cover public course-sharing materials. Personal schedules,
 grades, borrowing records and campus write operations are not provided by this
 skill. Do not invent a command, session or successful campus action.
+
+## Execution mode
+
+The runtime provisions remote mode and its tool credential file. Do not read or print that credential, change the configured endpoint, or switch to local mode to work around authentication/service failures. Remote downloads must stay inside the current workspace and are limited to 64 MiB per file. The local standalone mode remains available for developer use. Installing this Skill alone does not establish product Pi integration.
 
 ## Find a course
 
