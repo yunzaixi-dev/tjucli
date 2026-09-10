@@ -220,8 +220,8 @@ func TestRoomsProvider_CheckRooms_ValidationErrors(t *testing.T) {
 			wantErr: "building must not be empty",
 		},
 		{
-			name:    "invalid session 0",
-			query:   RoomQuery{Building: "一教", Session: 0, Date: "2026-09-09"},
+			name:  "invalid session 0",
+			query: RoomQuery{Building: "一教", Session: 0, Date: "2026-09-09"},
 			// Session 0 defaults to 1 so session 0 will actually succeed or default to 1
 			wantErr: "",
 		},
