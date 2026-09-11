@@ -1,3 +1,9 @@
+// Package toolserver 授权与令牌验证器实现。
+//
+// 机制说明：
+//  1. 基于文件的授权 Grants 配置：读取 TJUCLI_GRANTS_FILE，且文件大小硬限制 64 KiB，排查异常注入；
+//  2. 令牌哈希存储：服务端内存与配置文件仅存储令牌的 SHA-256 摘要（token_sha256），避免明文泄漏；
+//  3. 常量时间比对：使用 crypto/subtle 防止时序侧信道攻击（Timing Attack���。
 package toolserver
 
 import (

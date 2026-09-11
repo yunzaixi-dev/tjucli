@@ -1,3 +1,12 @@
+// Package toolserver 为沙箱内部的 Agent 提供安全可控的校园工具 HTTP 代理服务。
+//
+// 架构职责与安全边界：
+//  1. 沙箱隔离保护：云端 Agent 运行于受限容器内，不直接持有外部校园服务凭据，
+//     而是通过受限的 Bearer Token 访问本机监听的 toolserver（默认 127.0.0.1:18090）；
+//  2. 权限细粒度限制：每次调用通过 Authorizer 校验 token_sha256 与授权有效期（expires_at），
+//     并对特定 scope（如 course:read）进行鉴权；
+//  3. 传输沙箱安全保护：下载请求在服务端私有临时目录预检并流式传输，
+//     防止路径穿越（Path Traversal）逃逸到宿主敏感目录。
 package toolserver
 
 import (

@@ -1,3 +1,9 @@
+// tjucli-server 为天大校园工具守护服务，负责以受控 HTTP 接口对外提供校园能力。
+//
+// 核心运行规范：
+//  1. 默认监听 127.0.0.1:18090，仅限同机或容器内调用，不对公网开放；
+//  2. 依赖 TJUCLI_GRANTS_FILE 授权凭据文件，校验 Token SHA-256 摘要与权限范围；
+//  3. 提供 /healthz 健康探针与受保护的 /v1/course/* 校园能力路由。
 package main
 
 import (
