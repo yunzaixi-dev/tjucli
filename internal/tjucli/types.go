@@ -11,15 +11,15 @@ import "fmt"
 
 const (
 	// DefaultBaseURL 天津大学课程共享平台默认上游地址。
-	DefaultBaseURL       = "https://cs.tjuse.com"
+	DefaultBaseURL = "https://cs.tjuse.com"
 	// DefaultSearchPages 默认最大搜索目录扫描页数。
-	DefaultSearchPages   = 20
+	DefaultSearchPages = 20
 	// MaximumSearchPages 允许搜索的最大扫描页数上限。
-	MaximumSearchPages   = 100
+	MaximumSearchPages = 100
 	// DefaultSearchLimit 默认搜索结果条数上限。
-	DefaultSearchLimit   = 50
+	DefaultSearchLimit = 50
 	// MaximumSearchLimit 允许返回的最大搜索结果条数。
-	MaximumSearchLimit   = 1000
+	MaximumSearchLimit = 1000
 	// DefaultDownloadBytes 默认单文件下载大小阈值限制（64 MiB）。
 	DefaultDownloadBytes = int64(64 << 20)
 	// MaximumDownloadBytes 允许单文件下载的最大硬上限（1 GiB）。
@@ -31,7 +31,7 @@ type ItemKind string
 
 const (
 	// KindFile 普通文件资源。
-	KindFile   ItemKind = "file"
+	KindFile ItemKind = "file"
 	// KindFolder 目录/文件夹。
 	KindFolder ItemKind = "folder"
 )
