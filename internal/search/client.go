@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// Client ���含与 MeiliSearch 交互的基础配置与 HTTP 客户端。
+// Client 包含与 MeiliSearch 交互的基础配置与 HTTP 客户端。
 type Client struct {
 	baseURL string
 	apiKey  string
