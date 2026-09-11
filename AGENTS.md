@@ -13,4 +13,4 @@ Remote grants and file output boundaries are described in TOOL_SERVER.md; never 
 
 ## Branches
 
-Use only `dev` (default, direct development) and `release` (verified production source). Both branches run CI. Backend deployment is controlled by the integration repository pinned component SHAs; component pushes do not independently restart production services.
+Use `release` as the primary branch for rapid iteration and production source. `dev` is retained without deleting it. Both branches run CI. Backend deployment is controlled by the integration repository pinned component SHAs; component pushes do not independently restart production services.
