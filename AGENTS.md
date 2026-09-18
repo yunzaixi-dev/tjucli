@@ -4,6 +4,8 @@ Autonomous CLI and internal tool-service repository (`cmd/tjucli`, `cmd/tjucli-s
 Standard-library Go tools covering the verified public course sharing provider.
 Remote grants and file output boundaries are described in TOOL_SERVER.md; never add credentials to source.
 
+The repository is public and released under GPL-3.0-only; `package.json` remains private only to prevent accidental npm publication of this Go component.
+
 ## Rules & Boundaries
 - Module: `github.com/yunzaixi-dev/tjucli`
 - Go version: `1.26.0`

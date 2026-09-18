@@ -35,6 +35,12 @@ tjucli course download PATH --output FILE [--max-bytes N] [--json]
 See `TJUCLI.md` for full command specifications and safety boundaries.
 For Pi agent skills, see `skills/tjucli/SKILL.md`.
 
+## 许可证
+
+`tjucli` 是公开开源仓库：[yunzaixi-dev/tjucli](https://github.com/yunzaixi-dev/tjucli)。源码采用 **GPL-3.0-only**。再发布 CLI、Tool Server 或其修改版本时，须遵守 GPLv3 的源代码、版权声明和许可证保留要求；完整文本见仓库根目录的 `LICENSE`。第三方依赖继续遵循各自许可证。
+
+该许可证不授权 TJUClaw 私有 API 或 crawler 的源码。
+
 ## Development & Testing
 
 ```bash

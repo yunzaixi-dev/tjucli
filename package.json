@@ -1,5 +1,6 @@
 {
   "name": "@yunzaixi-dev/tjucli",
   "version": "0.0.26",
-  "private": true
+  "private": true,
+  "license": "GPL-3.0-only"
 }
