@@ -25,7 +25,7 @@ env:
 jobs:
   check-and-test:
     name: Check, test, and build CLI and tool server
-    runs-on: ubuntu-24.04
+    runs-on: tjucli
     timeout-minutes: 15
     steps:
       - name: Checkout source
