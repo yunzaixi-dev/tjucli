@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/yunzaixi-dev/tjucli/internal/knowledge"
 	"github.com/yunzaixi-dev/tjucli/internal/remote"
 	"github.com/yunzaixi-dev/tjucli/internal/tjucli"
 )
@@ -27,9 +28,14 @@ type courseProvider interface {
 }
 
 type runner struct {
-	provider courseProvider
-	stdout   io.Writer
-	stderr   io.Writer
+	provider  courseProvider
+	knowledge knowledgeSearcher
+	stdout    io.Writer
+	stderr    io.Writer
+}
+
+type knowledgeSearcher interface {
+	Search(context.Context, string, int, string) (knowledge.SearchResult, *tjucli.CLIError)
 }
 
 func main() {
@@ -83,9 +89,69 @@ func (r *runner) run(ctx context.Context, args []string) int {
 		return r.runCapabilities(args[1:], jsonOutput)
 	case "course":
 		return r.runCourse(ctx, args[1:], jsonOutput)
+	case "knowledge":
+		return r.runKnowledge(ctx, args[1:], jsonOutput)
 	default:
 		return r.fail(jsonOutput, tjucli.NewFlagError(fmt.Sprintf("unknown command %q", args[0])))
 	}
+}
+
+func (r *runner) runKnowledge(ctx context.Context, args []string, jsonOutput bool) int {
+	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprint(r.stdout, knowledgeHelp)
+		return 0
+	}
+	if args[0] != "search" {
+		return r.fail(jsonOutput, tjucli.NewFlagError(fmt.Sprintf("unknown knowledge command %q", args[0])))
+	}
+	if helpRequested(args[1:]) {
+		fmt.Fprintln(r.stdout, "Usage: tjucli knowledge search QUERY [--limit N] [--source SOURCE] [--json]")
+		return 0
+	}
+	positional, options, parseErr := parseOptions(args[1:], map[string]bool{"limit": true, "source": true})
+	if parseErr != nil {
+		return r.fail(jsonOutput, parseErr)
+	}
+	if len(positional) != 1 {
+		return r.fail(jsonOutput, tjucli.NewFlagError("knowledge search requires exactly one query"))
+	}
+	limit, numberErr := integerOption(options, "limit", knowledge.DefaultSearchLimit)
+	if numberErr != nil {
+		return r.fail(jsonOutput, numberErr)
+	}
+	if r.knowledge == nil {
+		switch strings.TrimSpace(os.Getenv("TJUCLI_MODE")) {
+		case "remote":
+			config, configErr := remote.LoadConfig()
+			if configErr != nil {
+				return r.fail(jsonOutput, configErr)
+			}
+			r.knowledge = remote.NewKnowledgeClient(config)
+		case "knowledge-local":
+			config, configErr := knowledge.LoadConfig()
+			if configErr != nil {
+				return r.fail(jsonOutput, configErr)
+			}
+			client, err := knowledge.NewClient(config, nil)
+			if err != nil {
+				return r.fail(jsonOutput, tjucli.NewRuntimeError("configuration_error", "invalid WeKnora configuration"))
+			}
+			r.knowledge = client
+		default:
+			return r.fail(jsonOutput, tjucli.NewRuntimeError("configuration_error", "knowledge search requires TJUCLI_MODE=knowledge-local or remote"))
+		}
+	}
+	data, searchErr := r.knowledge.Search(ctx, positional[0], limit, options["source"])
+	if searchErr != nil {
+		return r.fail(jsonOutput, searchErr)
+	}
+	if jsonOutput {
+		return r.success(data, struct{}{})
+	}
+	for _, hit := range data.Hits {
+		fmt.Fprintf(r.stdout, "%s\t%.4f\t%s\n", hit.Source, hit.Score, hit.SourceURL)
+	}
+	return 0
 }
 
 func (r *runner) runVersion(args []string, jsonOutput bool) int {
@@ -114,7 +180,7 @@ func (r *runner) runCapabilities(args []string, jsonOutput bool) int {
 	}
 	data := tjucli.CapabilitiesResult{
 		Provider: "public-course-sharing",
-		Commands: []string{"course ls", "course search", "course download"},
+		Commands: []string{"course ls", "course search", "course download", "knowledge search"},
 	}
 	if jsonOutput {
 		return r.success(data, struct{}{})
@@ -354,16 +420,27 @@ func helpRequested(args []string) bool {
 
 const rootHelp = `tjucli provides verified public Tianjin University data tools.
 
-Implemented scope: public course-sharing catalog and file downloads.
+Implemented scope: public course-sharing catalog, file downloads, and local WeKnora search.
 No campus login or student credentials are used.
 
 Usage:
   tjucli version [--json]
   tjucli capabilities [--json]
   tjucli course <command> [arguments] [--json]
+  tjucli knowledge search QUERY [--limit N] [--source SOURCE] [--json]
   tjucli help
 
 Run "tjucli course --help" for course commands.
+Run "tjucli knowledge --help" for knowledge commands.
+`
+
+const knowledgeHelp = `Usage: tjucli knowledge <command> [arguments] [--json]
+
+Commands:
+  search QUERY [--limit N] [--source SOURCE]
+                                            Search local WeKnora knowledge
+
+Requires TJUCLI_MODE=knowledge-local, WEKNORA_BASE_URL, and WEKNORA_API_KEY.
 `
 
 const courseHelp = `Usage: tjucli course <command> [arguments] [--json]

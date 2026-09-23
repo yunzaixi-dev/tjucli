@@ -148,6 +148,9 @@ func TestClient_ListAndSearch(t *testing.T) {
 		case "/v1/course/search":
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			_, _ = w.Write([]byte(`{"ok":true,"data":{"items":[{"name":"matched.pdf","path":"/matched.pdf","kind":"file","size":456,"modified_at":"2026-09-09T00:00:00Z"}]},"meta":{"scope":"course-catalog","pages_scanned":1,"incomplete":false}}`))
+		case "/v1/knowledge/search":
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"hits":[{"source":"course","item_id":"item-1","source_url":"https://example.com/doc","canonical_content_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","knowledge_id":"knowledge-1","chunk_id":"chunk-1","quoted_text":"quoted","score":0.9}]},"meta":{}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -185,6 +188,32 @@ func TestClient_ListAndSearch(t *testing.T) {
 			t.Fatalf("unexpected meta: %+v", meta)
 		}
 	})
+
+	t.Run("KnowledgeSearch success", func(t *testing.T) {
+		res, cliErr := client.KnowledgeSearch(context.Background(), "query", 1, "course")
+		if cliErr != nil || len(res.Hits) != 1 || res.Hits[0].QuotedText != "quoted" {
+			t.Fatalf("unexpected KnowledgeSearch result: %+v, %v", res, cliErr)
+		}
+	})
+}
+
+func TestClient_KnowledgeSearch_DoesNotFallback(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.URL.Path != "/v1/knowledge/search" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"ok":false,"error":{"code":"upstream_error","message":"hidden"}}`))
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	client := NewClient(Config{BaseURL: u, Token: strings.Repeat("a", 32)})
+	_, cliErr := client.KnowledgeSearch(context.Background(), "query", 1, "course")
+	if !called || cliErr == nil || cliErr.Code != "upstream_error" {
+		t.Fatalf("expected fixed-route upstream error, called=%t err=%v", called, cliErr)
+	}
 }
 
 func TestClient_RedirectRejection(t *testing.T) {

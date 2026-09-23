@@ -30,6 +30,7 @@ tjucli capabilities [--json]
 tjucli course ls [PATH] [--cursor CURSOR] [--json]
 tjucli course search QUERY [--max-pages N] [--limit N] [--json]
 tjucli course download PATH --output FILE [--max-bytes N] [--json]
+tjucli knowledge search QUERY [--limit N] [--source SOURCE] [--json]
 ```
 
 See `TJUCLI.md` for full command specifications and safety boundaries.

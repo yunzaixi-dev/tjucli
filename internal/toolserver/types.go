@@ -4,17 +4,19 @@ import (
 	"context"
 	"time"
 
+	"github.com/yunzaixi-dev/tjucli/internal/knowledge"
 	"github.com/yunzaixi-dev/tjucli/internal/tjucli"
 )
 
 const (
-	DefaultAddr             = "127.0.0.1:18090"
-	MaxRequestBodyBytes     = 16 * 1024       // 16KiB
-	MaxGrantsFileBytes      = 64 * 1024       // 64KiB
-	MaxDownloadBytes        = int64(64 << 20) // 64MiB
-	DefaultConcurrency      = 4
-	DefaultRequestTimeout   = 120 * time.Second
-	RequiredScopeCourseRead = "course:read"
+	DefaultAddr                = "127.0.0.1:18090"
+	MaxRequestBodyBytes        = 16 * 1024       // 16KiB
+	MaxGrantsFileBytes         = 64 * 1024       // 64KiB
+	MaxDownloadBytes           = int64(64 << 20) // 64MiB
+	DefaultConcurrency         = 4
+	DefaultRequestTimeout      = 120 * time.Second
+	RequiredScopeCourseRead    = "course:read"
+	RequiredScopeKnowledgeRead = "knowledge:read"
 )
 
 // Grant models one authorized scoped run token entry.
@@ -50,12 +52,22 @@ type CourseDownloadRequest struct {
 	MaxBytes *int64 `json:"max_bytes"`
 }
 
+type KnowledgeSearchRequest struct {
+	Query  string `json:"query"`
+	Limit  *int   `json:"limit"`
+	Source string `json:"source"`
+}
+
 // CourseProvider defines the course catalog and download operations.
 // Satisfied by *tjucli.Provider and test mocks.
 type CourseProvider interface {
 	List(ctx context.Context, providerPath, cursor string) (tjucli.ListResult, tjucli.ListMeta, *tjucli.CLIError)
 	Search(ctx context.Context, query string, maxPages, limit int) (tjucli.SearchResult, tjucli.SearchMeta, *tjucli.CLIError)
 	Download(ctx context.Context, providerPath, outputPath string, maxBytes int64) (tjucli.DownloadResult, *tjucli.CLIError)
+}
+
+type KnowledgeProvider interface {
+	Search(ctx context.Context, query string, limit int, source string) (knowledge.SearchResult, *tjucli.CLIError)
 }
 
 // AuthError represents an authentication or authorization failure.

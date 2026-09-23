@@ -8,7 +8,7 @@ The repository is public and released under GPL-3.0-only; `package.json` remains
 
 ## Rules & Boundaries
 - Module: `github.com/yunzaixi-dev/tjucli`
-- Go version: `1.26.0`
+- Go version: `1.27.0` (source of truth: `go.mod`)
 - No campus credentials or unverified features.
 - Primary tasks: `task check`, `task test`, `task build`, `task cli:build`.
 - Skill docs: `skills/tjucli/SKILL.md`.

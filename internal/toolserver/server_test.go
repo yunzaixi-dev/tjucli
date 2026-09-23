@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yunzaixi-dev/tjucli/internal/knowledge"
 	"github.com/yunzaixi-dev/tjucli/internal/tjucli"
 )
 
@@ -52,6 +53,17 @@ type mockAuthorizer struct {
 	authFunc func(ctx context.Context, token, requiredScope string) (*Grant, *AuthError)
 }
 
+type mockKnowledgeProvider struct {
+	searchFunc func(context.Context, string, int, string) (knowledge.SearchResult, *tjucli.CLIError)
+}
+
+func (m *mockKnowledgeProvider) Search(ctx context.Context, query string, limit int, source string) (knowledge.SearchResult, *tjucli.CLIError) {
+	if m.searchFunc != nil {
+		return m.searchFunc(ctx, query, limit, source)
+	}
+	return knowledge.SearchResult{}, nil
+}
+
 func (m *mockAuthorizer) Authorize(ctx context.Context, token, requiredScope string) (*Grant, *AuthError) {
 	if m.authFunc != nil {
 		return m.authFunc(ctx, token, requiredScope)
@@ -64,7 +76,7 @@ func setupTestServer(t *testing.T, mp *mockProvider) (*Server, string, string) {
 	token := "secret-test-token"
 	tokenHex := hashToken(token)
 	expiry := time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339)
-	grantsJSON := fmt.Sprintf(`{"grants":[{"token_sha256":"%s","run_id":"0123456789abcdef0123456789abcdef","expires_at":"%s","scopes":["course:read"]}]}`, tokenHex, expiry)
+	grantsJSON := fmt.Sprintf(`{"grants":[{"token_sha256":"%s","run_id":"0123456789abcdef0123456789abcdef","expires_at":"%s","scopes":["course:read","knowledge:read"]}]}`, tokenHex, expiry)
 
 	grantsPath := createTestGrantsFile(t, grantsJSON, 0600)
 	authorizer := NewFileAuthorizer(grantsPath)
@@ -125,7 +137,7 @@ func TestServer_Healthz_MethodNotAllowed(t *testing.T) {
 func TestServer_AuthAndMethods(t *testing.T) {
 	srv, token, _ := setupTestServer(t, &mockProvider{})
 
-	routes := []string{"/v1/course/list", "/v1/course/search", "/v1/course/download"}
+	routes := []string{"/v1/course/list", "/v1/course/search", "/v1/course/download", "/v1/knowledge/search"}
 
 	for _, route := range routes {
 		t.Run(route+" GET rejected 405", func(t *testing.T) {
@@ -252,6 +264,25 @@ func TestServer_ExpiredGrantRejected(t *testing.T) {
 	}
 }
 
+func TestServer_KnowledgeSearch_ExpiredGrantRejected(t *testing.T) {
+	mockAuth := &mockAuthorizer{authFunc: func(context.Context, string, string) (*Grant, *AuthError) {
+		return &Grant{ExpiresAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), Scopes: []string{RequiredScopeKnowledgeRead}}, nil
+	}}
+	srv, err := NewServer(ServerConfig{Addr: "127.0.0.1:0", Authorizer: mockAuth, KnowledgeProvider: &mockKnowledgeProvider{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	req := httptest.NewRequest(http.MethodPost, "/v1/knowledge/search", strings.NewReader(`{"query":"q"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for expired knowledge grant, got %d", w.Code)
+	}
+}
+
 func TestServer_SpoolBaseDir_NeverRemovesParent(t *testing.T) {
 	baseDir := t.TempDir()
 	canaryFile := filepath.Join(baseDir, "canary.txt")
@@ -320,6 +351,92 @@ func TestServer_CourseList_Success(t *testing.T) {
 	}
 	if !resp.OK {
 		t.Fatalf("expected ok:true, got false")
+	}
+}
+
+func TestServer_KnowledgeSearch_SuccessPreservesCitations(t *testing.T) {
+	const token = "knowledge-token"
+	hit := knowledge.Hit{Source: "course", ItemID: "item-1", SourceURL: "https://example.com/doc", CanonicalContentHash: strings.Repeat("a", 64), KnowledgeID: "knowledge-1", ChunkID: "chunk-1", QuotedText: "quoted", Score: 0.9}
+	provider := &mockKnowledgeProvider{searchFunc: func(ctx context.Context, query string, limit int, source string) (knowledge.SearchResult, *tjucli.CLIError) {
+		if query != "calculus" || limit != 4 || source != "course" {
+			return knowledge.SearchResult{}, tjucli.NewFlagError("unexpected knowledge arguments")
+		}
+		return knowledge.SearchResult{Hits: []knowledge.Hit{hit}}, nil
+	}}
+	grant := &Grant{ExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339), Scopes: []string{RequiredScopeKnowledgeRead}}
+	srv, err := NewServer(ServerConfig{Addr: "127.0.0.1:0", Authorizer: &mockAuthorizer{authFunc: func(context.Context, string, string) (*Grant, *AuthError) { return grant, nil }}, KnowledgeProvider: provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/knowledge/search", strings.NewReader(`{"query":"calculus","limit":4,"source":"course"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), hit.QuotedText) || !strings.Contains(w.Body.String(), hit.SourceURL) {
+		t.Fatalf("unexpected knowledge response: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestServer_KnowledgeSearch_RequiresDedicatedScope(t *testing.T) {
+	srv, err := NewServer(ServerConfig{Addr: "127.0.0.1:0", Authorizer: &mockAuthorizer{authFunc: func(_ context.Context, _, scope string) (*Grant, *AuthError) {
+		if scope != RequiredScopeKnowledgeRead {
+			return nil, &AuthError{StatusCode: http.StatusForbidden, Code: "forbidden", Message: "forbidden"}
+		}
+		return nil, &AuthError{StatusCode: http.StatusForbidden, Code: "forbidden", Message: "forbidden"}
+	}}, KnowledgeProvider: &mockKnowledgeProvider{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	req := httptest.NewRequest(http.MethodPost, "/v1/knowledge/search", strings.NewReader(`{"query":"q"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestServer_KnowledgeSearch_RejectsMalformedRequestAndProviderFailure(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		body        string
+		providerErr *tjucli.CLIError
+		status      int
+		code        string
+	}{
+		{name: "malformed", body: `{"query":"q","unknown":true}`, status: http.StatusBadRequest, code: "invalid_argument"},
+		{name: "upstream", body: `{"query":"q"}`, providerErr: tjucli.NewRuntimeError("upstream_error", "secret upstream detail"), status: http.StatusBadGateway, code: "upstream_error"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &mockKnowledgeProvider{searchFunc: func(context.Context, string, int, string) (knowledge.SearchResult, *tjucli.CLIError) {
+				return knowledge.SearchResult{}, test.providerErr
+			}}
+			grant := &Grant{ExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339), Scopes: []string{RequiredScopeKnowledgeRead}}
+			srv, err := NewServer(ServerConfig{Addr: "127.0.0.1:0", Authorizer: &mockAuthorizer{authFunc: func(context.Context, string, string) (*Grant, *AuthError) { return grant, nil }}, KnowledgeProvider: provider})
+			requireNoError(t, err)
+			defer srv.Close()
+			req := httptest.NewRequest(http.MethodPost, "/v1/knowledge/search", strings.NewReader(test.body))
+			req.Header.Set("Authorization", "Bearer token")
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+			if w.Code != test.status || !strings.Contains(w.Body.String(), `"code":"`+test.code+`"`) {
+				t.Fatalf("expected %d/%s, got %d: %s", test.status, test.code, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -447,6 +564,29 @@ func TestServer_ProviderErrorRedaction(t *testing.T) {
 	}
 	if env.Error.Code != "upstream_error" {
 		t.Fatalf("expected upstream_error, got %s", env.Error.Code)
+	}
+}
+
+func TestServer_KnowledgeSearch_RejectsMalformedProviderResult(t *testing.T) {
+	grant := &Grant{ExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339), Scopes: []string{RequiredScopeKnowledgeRead}}
+	srv, err := NewServer(ServerConfig{
+		Addr:       "127.0.0.1:0",
+		Authorizer: &mockAuthorizer{authFunc: func(context.Context, string, string) (*Grant, *AuthError) { return grant, nil }},
+		KnowledgeProvider: &mockKnowledgeProvider{searchFunc: func(context.Context, string, int, string) (knowledge.SearchResult, *tjucli.CLIError) {
+			return knowledge.SearchResult{Hits: []knowledge.Hit{{Source: "missing-citation"}}}, nil
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	req := httptest.NewRequest(http.MethodPost, "/v1/knowledge/search", strings.NewReader(`{"query":"q"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), `"code":"protocol_error"`) {
+		t.Fatalf("expected protocol error, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

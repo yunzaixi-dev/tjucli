@@ -27,29 +27,32 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/yunzaixi-dev/tjucli/internal/knowledge"
 	"github.com/yunzaixi-dev/tjucli/internal/tjucli"
 )
 
 // ServerConfig holds the configuration for the ToolServer.
 type ServerConfig struct {
-	Addr           string
-	GrantsFilePath string
-	MaxConcurrency int
-	DefaultTimeout time.Duration
-	SpoolBaseDir   string
-	Authorizer     Authorizer
-	CourseProvider CourseProvider
+	Addr              string
+	GrantsFilePath    string
+	MaxConcurrency    int
+	DefaultTimeout    time.Duration
+	SpoolBaseDir      string
+	Authorizer        Authorizer
+	CourseProvider    CourseProvider
+	KnowledgeProvider KnowledgeProvider
 }
 
 // Server encapsulates the HTTP server, routing, authorization, and concurrency controls.
 type Server struct {
-	cfg        ServerConfig
-	authorizer Authorizer
-	provider   CourseProvider
-	sem        chan struct{}
-	httpServer *http.Server
-	spoolDir   string
-	spoolMu    sync.Mutex
+	cfg               ServerConfig
+	authorizer        Authorizer
+	provider          CourseProvider
+	knowledgeProvider KnowledgeProvider
+	sem               chan struct{}
+	httpServer        *http.Server
+	spoolDir          string
+	spoolMu           sync.Mutex
 }
 
 // NewServer initializes a new Server with the provided configuration.
@@ -83,6 +86,17 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			return nil, fmt.Errorf("failed to initialize course provider: %w", err)
 		}
 	}
+	knowledgeProvider := cfg.KnowledgeProvider
+	if knowledgeProvider == nil {
+		config, configErr := knowledge.LoadConfig()
+		if configErr == nil {
+			var knowledgeErr error
+			knowledgeProvider, knowledgeErr = knowledge.NewClient(config, nil)
+			if knowledgeErr != nil {
+				return nil, fmt.Errorf("failed to initialize knowledge provider: %w", knowledgeErr)
+			}
+		}
+	}
 
 	// Always create a dedicated child directory inside SpoolBaseDir (or system temp if empty)
 	// Never delete SpoolBaseDir itself.
@@ -94,11 +108,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	_ = os.Chmod(spoolDir, 0700)
 
 	s := &Server{
-		cfg:        cfg,
-		authorizer: authorizer,
-		provider:   provider,
-		sem:        make(chan struct{}, cfg.MaxConcurrency),
-		spoolDir:   spoolDir,
+		cfg:               cfg,
+		authorizer:        authorizer,
+		provider:          provider,
+		knowledgeProvider: knowledgeProvider,
+		sem:               make(chan struct{}, cfg.MaxConcurrency),
+		spoolDir:          spoolDir,
 	}
 
 	mux := http.NewServeMux()
@@ -106,6 +121,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	mux.HandleFunc("POST /v1/course/list", s.withAuthAndLimit(RequiredScopeCourseRead, s.handleCourseList))
 	mux.HandleFunc("POST /v1/course/search", s.withAuthAndLimit(RequiredScopeCourseRead, s.handleCourseSearch))
 	mux.HandleFunc("POST /v1/course/download", s.withAuthAndLimit(RequiredScopeCourseRead, s.handleCourseDownload))
+	mux.HandleFunc("POST /v1/knowledge/search", s.withAuthAndLimit(RequiredScopeKnowledgeRead, s.handleKnowledgeSearch))
 
 	s.httpServer = &http.Server{
 		Addr:              cfg.Addr,
@@ -294,6 +310,42 @@ func (s *Server) handleCourseSearch(w http.ResponseWriter, r *http.Request, _ *G
 	}
 
 	writeSuccess(w, http.StatusOK, result, meta)
+}
+
+func (s *Server) handleKnowledgeSearch(w http.ResponseWriter, r *http.Request, _ *Grant) {
+	var req KnowledgeSearchRequest
+	if err := decodeStrictJSON(w, r, &req); err != nil {
+		return
+	}
+	if strings.TrimSpace(req.Query) == "" || len([]byte(req.Query)) > knowledge.MaxQueryBytes {
+		writeFailure(w, http.StatusBadRequest, "invalid_argument", "knowledge query must be non-empty and at most 8192 bytes")
+		return
+	}
+	limit := knowledge.DefaultSearchLimit
+	if req.Limit != nil {
+		limit = *req.Limit
+	}
+	if limit < 1 || limit > knowledge.MaxSearchLimit {
+		writeFailure(w, http.StatusBadRequest, "invalid_argument", "knowledge limit must be between 1 and 100")
+		return
+	}
+	if s.knowledgeProvider == nil {
+		writeFailure(w, http.StatusBadGateway, "upstream_error", "knowledge provider unavailable")
+		return
+	}
+	result, cliErr := s.knowledgeProvider.Search(r.Context(), req.Query, limit, req.Source)
+	if cliErr != nil {
+		writeProviderError(w, cliErr)
+		return
+	}
+	if err := knowledge.ValidateSearchResult(result, limit); err != nil {
+		writeFailure(w, http.StatusBadGateway, "protocol_error", "knowledge provider returned an invalid result")
+		return
+	}
+	if r.Context().Err() != nil {
+		return
+	}
+	writeSuccess(w, http.StatusOK, result, struct{}{})
 }
 
 func (s *Server) handleCourseDownload(w http.ResponseWriter, r *http.Request, _ *Grant) {

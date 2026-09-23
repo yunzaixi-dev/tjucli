@@ -21,6 +21,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/yunzaixi-dev/tjucli/internal/knowledge"
 	"github.com/yunzaixi-dev/tjucli/internal/tjucli"
 )
 
@@ -44,6 +45,18 @@ type Config struct {
 type Client struct {
 	cfg        Config
 	httpClient *http.Client
+}
+
+type KnowledgeClient struct {
+	client *Client
+}
+
+func NewKnowledgeClient(cfg Config) *KnowledgeClient {
+	return &KnowledgeClient{client: NewClient(cfg)}
+}
+
+func (c *KnowledgeClient) Search(ctx context.Context, query string, limit int, source string) (knowledge.SearchResult, *tjucli.CLIError) {
+	return c.client.KnowledgeSearch(ctx, query, limit, source)
 }
 
 // LoadConfig reads and strictly validates the remote environment variables.
@@ -287,6 +300,38 @@ func (c *Client) Search(ctx context.Context, query string, maxPages, limit int) 
 	}
 
 	return result, meta, nil
+}
+
+func (c *Client) KnowledgeSearch(ctx context.Context, query string, limit int, source string) (knowledge.SearchResult, *tjucli.CLIError) {
+	if !utf8.ValidString(query) || strings.TrimSpace(query) == "" || len([]byte(query)) > knowledge.MaxQueryBytes {
+		return knowledge.SearchResult{}, tjucli.NewFlagError("knowledge query must be non-empty and at most 8192 bytes")
+	}
+	if limit < 1 || limit > knowledge.MaxSearchLimit {
+		return knowledge.SearchResult{}, tjucli.NewFlagError("knowledge limit must be between 1 and 100")
+	}
+	body, err := json.Marshal(struct {
+		Query  string `json:"query"`
+		Limit  int    `json:"limit"`
+		Source string `json:"source,omitempty"`
+	}{query, limit, source})
+	if err != nil {
+		return knowledge.SearchResult{}, tjucli.NewRuntimeError("protocol_error", "failed to encode request")
+	}
+	var envelope knowledgeResponseEnvelope
+	if cliErr := c.doJSON(ctx, "/v1/knowledge/search", body, &envelope); cliErr != nil {
+		return knowledge.SearchResult{}, cliErr
+	}
+	if envelope.OK == nil || !*envelope.OK || envelope.Data == nil || envelope.Data.Hits == nil {
+		return knowledge.SearchResult{}, tjucli.NewRuntimeError("protocol_error", "malformed knowledge response envelope")
+	}
+	result := knowledge.SearchResult{Hits: make([]knowledge.Hit, 0, len(*envelope.Data.Hits))}
+	for _, hit := range *envelope.Data.Hits {
+		result.Hits = append(result.Hits, hit)
+	}
+	if err := knowledge.ValidateSearchResult(result, limit); err != nil {
+		return knowledge.SearchResult{}, tjucli.NewRuntimeError("protocol_error", "invalid knowledge response")
+	}
+	return result, nil
 }
 
 // Download implements courseProvider.Download.
@@ -561,6 +606,16 @@ type searchResponseEnvelope struct {
 	OK   *bool               `json:"ok"`
 	Data *searchResultData   `json:"data"`
 	Meta *searchMetaEnvelope `json:"meta"`
+}
+
+type knowledgeResponseEnvelope struct {
+	OK   *bool                `json:"ok"`
+	Data *knowledgeResultData `json:"data"`
+	Meta json.RawMessage      `json:"meta"`
+}
+
+type knowledgeResultData struct {
+	Hits *[]knowledge.Hit `json:"hits"`
 }
 
 type searchResultData struct {

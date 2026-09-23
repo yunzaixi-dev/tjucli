@@ -23,6 +23,7 @@ tjucli capabilities [--json]
 tjucli course ls [PATH] [--cursor CURSOR] [--json]
 tjucli course search QUERY [--max-pages N] [--limit N] [--json]
 tjucli course download PATH --output FILE [--max-bytes N] [--json]
+tjucli knowledge search QUERY [--limit N] [--source SOURCE] [--json]
 ```
 
 `course ls` returns one provider page. Its `next_cursor` is opaque and can be supplied unchanged with `--cursor`.
@@ -42,9 +43,13 @@ Invalid command arguments exit with status 2. Provider, protocol, download, and 
 
 ## Remote mode
 
-Set `TJUCLI_MODE=remote`, `TJUCLI_SERVER_URL` and `TJUCLI_TOKEN_FILE` for authenticated tool-server calls. See [TOOL_SERVER.md](TOOL_SERVER.md) for the grant and HTTP contract. The command/output syntax stays the same; the output path belongs to the CLI workspace and is never sent to the server. Remote mode confines downloads to the current working directory and caps downloads at the server's 64 MiB limit. Redirects to the tool server are rejected. Failures do not fall back to direct mode.
+Set `TJUCLI_MODE=remote`, `TJUCLI_SERVER_URL` and `TJUCLI_TOKEN_FILE` for authenticated tool-server calls. See [TOOL_SERVER.md](TOOL_SERVER.md) for the grant and HTTP contract. Course commands use `course:read`; `knowledge search` uses the dedicated `knowledge:read` route and preserves citation-bearing hits. Remote mode never falls back to direct WeKnora access. The command/output syntax stays the same; the output path belongs to the CLI workspace and is never sent to the server. Remote mode confines downloads to the current working directory and caps downloads at the server's 64 MiB limit. Redirects to the tool server are rejected. Failures do not fall back to direct mode.
 
 The standalone default remains local; the redirect and 1 GiB rules below describe that direct provider mode. `version` and help do not require remote credentials.
+
+## Local WeKnora mode
+
+`knowledge search` is enabled only with `TJUCLI_MODE=knowledge-local`, `WEKNORA_BASE_URL`, and `WEKNORA_API_KEY`. The optional `WEKNORA_SEARCH_PATH` defaults to `/search`; request and response shapes are isolated because the upstream schema is version-sensitive. Non-loopback base URLs must use HTTPS. Query, request, response, result count, and request time are bounded, and hits without complete citation provenance are rejected. This command is a local CLI core and does not claim a live deployment or remote tool-server integration.
 
 ## Safety boundaries
 

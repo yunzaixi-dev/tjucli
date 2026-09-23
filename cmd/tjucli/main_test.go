@@ -214,3 +214,27 @@ func TestInvalidTJUCliModeFails(t *testing.T) {
 		t.Fatalf("expected configuration_error, got %#v", env)
 	}
 }
+
+func TestKnowledgeSearchUsesExplicitLocalMode(t *testing.T) {
+	t.Setenv("TJUCLI_MODE", "knowledge-local")
+	t.Setenv("WEKNORA_BASE_URL", "https://knowledge.example")
+	t.Setenv("WEKNORA_API_KEY", "test-key")
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	code := (&runner{stdout: stdout, stderr: stderr}).run(context.Background(), []string{"knowledge", "search", "q", "--json"})
+	if code == 0 || !strings.Contains(stdout.String(), `"code":"upstream_error"`) {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRemoteModeDoesNotFallbackToWeKnora(t *testing.T) {
+	t.Setenv("TJUCLI_MODE", "remote")
+	t.Setenv("TJUCLI_SERVER_URL", "")
+	t.Setenv("TJUCLI_TOKEN_FILE", "")
+	t.Setenv("WEKNORA_BASE_URL", "https://knowledge.example")
+	t.Setenv("WEKNORA_API_KEY", "test-key")
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	code := (&runner{stdout: stdout, stderr: stderr}).run(context.Background(), []string{"knowledge", "search", "q", "--json"})
+	if code != 1 || !strings.Contains(stdout.String(), `"code":"configuration_error"`) {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
