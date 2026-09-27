@@ -21,6 +21,9 @@ func createTestTokenFile(t *testing.T, content string, mode os.FileMode) string 
 	if err := os.WriteFile(p, []byte(content), mode); err != nil {
 		t.Fatalf("failed to write token file: %v", err)
 	}
+	if err := os.Chmod(p, mode); err != nil {
+		t.Fatalf("failed to set token file mode: %v", err)
+	}
 	return p
 }
 

@@ -148,6 +148,8 @@ func TestVersionCapabilitiesAndHelp(t *testing.T) {
 		{args: []string{"version", "--json"}, want: `"version":"dev"`},
 		{args: []string{"capabilities", "--json"}, want: `"course download"`},
 		{args: []string{"course", "--help"}, want: "max-bytes=67108864"},
+		{args: []string{"knowledge", "--help"}, want: "wepeiyang-lake-posts"},
+		{args: []string{"knowledge", "search", "--help"}, want: "provenance exactly"},
 	} {
 		stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 		code := (&runner{provider: &fakeProvider{}, stdout: stdout, stderr: stderr}).run(context.Background(), test.args)
@@ -219,6 +221,7 @@ func TestKnowledgeSearchUsesExplicitLocalMode(t *testing.T) {
 	t.Setenv("TJUCLI_MODE", "knowledge-local")
 	t.Setenv("WEKNORA_BASE_URL", "https://knowledge.example")
 	t.Setenv("WEKNORA_API_KEY", "test-key")
+	t.Setenv("WEKNORA_KNOWLEDGE_BASE_ID", "kb-test")
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	code := (&runner{stdout: stdout, stderr: stderr}).run(context.Background(), []string{"knowledge", "search", "q", "--json"})
 	if code == 0 || !strings.Contains(stdout.String(), `"code":"upstream_error"`) {

@@ -106,6 +106,7 @@ func (r *runner) runKnowledge(ctx context.Context, args []string, jsonOutput boo
 	}
 	if helpRequested(args[1:]) {
 		fmt.Fprintln(r.stdout, "Usage: tjucli knowledge search QUERY [--limit N] [--source SOURCE] [--json]")
+		fmt.Fprintln(r.stdout, "SOURCE must match indexed provenance exactly; see 'tjucli knowledge --help' for examples.")
 		return 0
 	}
 	positional, options, parseErr := parseOptions(args[1:], map[string]bool{"limit": true, "source": true})
@@ -438,9 +439,14 @@ const knowledgeHelp = `Usage: tjucli knowledge <command> [arguments] [--json]
 
 Commands:
   search QUERY [--limit N] [--source SOURCE]
-                                            Search local WeKnora knowledge
+                                            Search campus knowledge with citations
 
-Requires TJUCLI_MODE=knowledge-local, WEKNORA_BASE_URL, and WEKNORA_API_KEY.
+--source matches the indexed provenance ID exactly, not a short alias.
+Examples (when indexed): peiyang-wiki-public, college-arch,
+  twt-studyroom-catalog, wepeiyang-lake-posts, public-course-sharing.
+
+Requires TJUCLI_MODE=knowledge-local (with WeKnora configuration) or remote
+(with a knowledge:read grant). Use --json for citation-bearing results.
 `
 
 const courseHelp = `Usage: tjucli course <command> [arguments] [--json]
