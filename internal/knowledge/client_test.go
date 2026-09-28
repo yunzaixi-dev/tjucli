@@ -63,7 +63,7 @@ func TestWeKnoraSearchRequestsEnoughCitedHitsBeyondDefaultTen(t *testing.T) {
 			KnowledgeIDs          []string `json:"knowledge_ids"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.QueryText != "校园信息" ||
-			payload.MatchCount != 25 || !payload.SkipContextEnrichment || len(payload.KnowledgeIDs) != 25 {
+			payload.MatchCount != 100 || !payload.SkipContextEnrichment || len(payload.KnowledgeIDs) != 25 {
 			t.Errorf("unexpected WeKnora request: %+v, %v", payload, err)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return

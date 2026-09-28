@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yunzaixi-dev/tjucli/internal/knowledge"
 	"github.com/yunzaixi-dev/tjucli/internal/tjucli"
 )
 
@@ -239,5 +240,33 @@ func TestRemoteModeDoesNotFallbackToWeKnora(t *testing.T) {
 	code := (&runner{stdout: stdout, stderr: stderr}).run(context.Background(), []string{"knowledge", "search", "q", "--json"})
 	if code != 1 || !strings.Contains(stdout.String(), `"code":"configuration_error"`) {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+type fakeKnowledge struct {
+	result knowledge.SearchResult
+}
+
+func (f fakeKnowledge) Search(context.Context, string, int, string) (knowledge.SearchResult, *tjucli.CLIError) {
+	return f.result, nil
+}
+
+func TestKnowledgeSearchTextIncludesCitationExcerpt(t *testing.T) {
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	quote := "北洋园校区自习室开放时间 07:00 ~ 23:00\n下一行"
+	code := (&runner{
+		knowledge: fakeKnowledge{result: knowledge.SearchResult{Hits: []knowledge.Hit{{
+			Source: "peiyang-wiki-public", Score: 0.81234,
+			SourceURL: "https://wiki.example/study", QuotedText: quote,
+		}}}},
+		stdout: stdout, stderr: stderr,
+	}).run(context.Background(), []string{"knowledge", "search", "北洋园自习室开放时间", "--limit", "1"})
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "peiyang-wiki-public\t0.8123\thttps://wiki.example/study\t") ||
+		!strings.Contains(got, "07:00 ~ 23:00") || strings.Contains(got, "\n下一行") {
+		t.Fatalf("text result hid the citation: %q", got)
 	}
 }

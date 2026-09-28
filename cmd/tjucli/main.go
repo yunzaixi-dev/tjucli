@@ -152,9 +152,22 @@ func (r *runner) runKnowledge(ctx context.Context, args []string, jsonOutput boo
 		return r.success(data, struct{}{})
 	}
 	for _, hit := range data.Hits {
-		fmt.Fprintf(r.stdout, "%s\t%.4f\t%s\n", hit.Source, hit.Score, hit.SourceURL)
+		fmt.Fprintln(r.stdout, formatKnowledgeText(hit))
 	}
 	return 0
+}
+
+func formatKnowledgeText(hit knowledge.Hit) string {
+	return fmt.Sprintf("%s\t%.4f\t%s\t%s", hit.Source, hit.Score, hit.SourceURL, citationExcerpt(hit.QuotedText, 200))
+}
+
+func citationExcerpt(text string, maxRunes int) string {
+	compact := strings.Join(strings.Fields(text), " ")
+	runes := []rune(compact)
+	if maxRunes < 1 || len(runes) <= maxRunes {
+		return compact
+	}
+	return string(runes[:maxRunes]) + "…"
 }
 
 func (r *runner) runVersion(args []string, jsonOutput bool) int {
@@ -448,9 +461,12 @@ Commands:
 --source matches the indexed provenance ID exactly, not a short alias.
 Examples (when indexed): peiyang-wiki-public, college-arch,
   twt-studyroom-catalog, wepeiyang-lake-posts, public-course-sharing.
+Unfiltered search keeps an official campus page ahead of a forum post when
+their scores are close. Pass --source to search one provenance exactly.
 
 Requires TJUCLI_MODE=knowledge-local (with WeKnora configuration) or remote
-(with a knowledge:read grant). Use --json for citation-bearing results.
+(with a knowledge:read grant). Text lines are source, score, source URL, and a
+short citation excerpt. Use --json for the full citation record.
 `
 
 const courseHelp = `Usage: tjucli course <command> [arguments] [--json]

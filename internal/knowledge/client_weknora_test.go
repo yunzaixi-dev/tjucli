@@ -25,7 +25,7 @@ func TestWeKnoraSearchUsesRealEndpointAndOriginalCitation(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 		}
-		if request["query_text"] != "校历" || request["match_count"] != float64(3) ||
+		if request["query_text"] != "校历" || request["match_count"] != float64(12) ||
 			request["skip_context_enrichment"] != true {
 			t.Errorf("unexpected search request fields")
 		}
@@ -119,7 +119,7 @@ func TestWeKnoraSearchFiltersSourceAndBoundsResults(t *testing.T) {
 		}
 		ids, ok := request["knowledge_ids"].([]any)
 		if !ok || len(ids) != 2 || ids[0] != "doc-calendar-1" || ids[1] != "doc-calendar-2" ||
-			request["match_count"] != float64(2) {
+			request["match_count"] != float64(8) {
 			t.Errorf("unexpected source scope: %#v", request)
 		}
 		if _, ok := request["top_k"]; ok {
@@ -232,7 +232,7 @@ func TestWeKnoraScopedSearchAcceptsLargeForumScopeWithoutDroppingDocuments(t *te
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil ||
 			len(payload.KnowledgeIDs) != total || payload.KnowledgeIDs[total-1] != lastID ||
-			payload.MatchCount != 1 {
+			payload.MatchCount != 4 {
 			t.Errorf("incomplete large source scope: ids=%d error=%v", len(payload.KnowledgeIDs), err)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []map[string]any{{
@@ -251,5 +251,174 @@ func TestWeKnoraScopedSearchAcceptsLargeForumScopeWithoutDroppingDocuments(t *te
 	result, cliErr := client.Search(context.Background(), "校园", 1, "wepeiyang-lake-posts")
 	if cliErr != nil || len(result.Hits) != 1 || result.Hits[0].KnowledgeID != lastID {
 		t.Fatalf("large scoped search failed: %d hits, error %v", len(result.Hits), cliErr)
+	}
+}
+
+func TestWeKnoraSearchFusesVectorScoreWithKeywordOnlyHit(t *testing.T) {
+	const kb = "kb-fuse"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			DisableKeywordsMatch bool    `json:"disable_keywords_match"`
+			DisableVectorMatch   bool    `json:"disable_vector_match"`
+			VectorThreshold      float64 `json:"vector_threshold"`
+			MatchCount           int     `json:"match_count"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.MatchCount != 12 || request.DisableKeywordsMatch == request.DisableVectorMatch {
+			t.Errorf("channels were not requested separately: %+v", request)
+		}
+		hash := strings.Repeat("b", 64)
+		meta := map[string]any{
+			"source": "twt-studyroom-catalog", "item_id": "room",
+			"source_url": "https://example.test/room", "canonical_hash": hash,
+		}
+		if request.DisableKeywordsMatch {
+			if request.VectorThreshold != 0.2 {
+				t.Errorf("vector threshold = %v", request.VectorThreshold)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []map[string]any{{
+				"id": "chunk-vector", "knowledge_id": "knowledge-vector",
+				"content": "vector quotation", "score": 0.81, "metadata": meta,
+			}}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []map[string]any{
+			{
+				"id": "chunk-vector", "knowledge_id": "knowledge-vector",
+				"content": "vector quotation", "score": 37.5, "metadata": meta,
+			},
+			{
+				"id": "chunk-keyword", "knowledge_id": "knowledge-keyword",
+				"content": "keyword quotation", "score": 12, "metadata": map[string]any{
+					"source": "peiyang-wiki-public", "item_id": "wiki",
+					"source_url": "https://example.test/wiki", "canonical_hash": hash,
+				},
+			},
+		}})
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{BaseURL: server.URL, APIKey: "test-key",
+		KnowledgeBaseID: kb, SearchPath: DefaultSearchPath}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, cliErr := client.Search(context.Background(), "自习室开放时间", 3, "")
+	if cliErr != nil {
+		t.Fatal(cliErr)
+	}
+	if len(result.Hits) != 2 {
+		t.Fatalf("hits = %#v", result.Hits)
+	}
+	if result.Hits[0].ChunkID != "chunk-vector" || result.Hits[0].Score < 0.81 || result.Hits[0].Score > 1 {
+		t.Fatalf("vector hit was not kept as the stronger citation: %#v", result.Hits[0])
+	}
+	if result.Hits[1].ChunkID != "chunk-keyword" || result.Hits[1].Score <= 0 || result.Hits[1].Score > 1 {
+		t.Fatalf("keyword-only hit was not calibrated: %#v", result.Hits[1])
+	}
+}
+
+func TestWeKnoraSourceListingContinuesWhenTotalGrows(t *testing.T) {
+	const kb = "kb-growing"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			page := r.URL.Query().Get("page")
+			if page == "1" {
+				rows := make([]map[string]any, knowledgePageSize)
+				for index := range rows {
+					rows[index] = map[string]any{
+						"id": fmt.Sprintf("other-%08d", index), "knowledge_base_id": kb,
+						"parse_status": "completed", "metadata": map[string]any{"source": "other"},
+					}
+				}
+				rows[0] = map[string]any{
+					"id": "target-knowledge", "knowledge_base_id": kb,
+					"parse_status": "completed", "metadata": map[string]any{"source": "campus-calendar"},
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "total": knowledgePageSize + 1, "data": rows})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "total": knowledgePageSize + 2, "data": []map[string]any{
+				{"id": "target-knowledge", "knowledge_base_id": kb, "parse_status": "completed",
+					"metadata": map[string]any{"source": "campus-calendar"}},
+				{"id": "added-knowledge", "knowledge_base_id": kb, "parse_status": "completed",
+					"metadata": map[string]any{"source": "campus-calendar"}},
+			}})
+			return
+		}
+		var request struct {
+			KnowledgeIDs []string `json:"knowledge_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if len(request.KnowledgeIDs) != 2 || request.KnowledgeIDs[0] != "target-knowledge" ||
+			request.KnowledgeIDs[1] != "added-knowledge" {
+			t.Errorf("growing list was not deduped: %#v", request.KnowledgeIDs)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []map[string]any{{
+			"id": "chunk-target", "knowledge_id": "target-knowledge",
+			"content": "synthetic snippet", "score": 0.8,
+			"metadata": map[string]any{"source": "campus-calendar", "item_id": "synthetic",
+				"source_url": "https://example.test/calendar", "canonical_hash": strings.Repeat("c", 64)},
+		}}})
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{BaseURL: server.URL, APIKey: "test-key",
+		KnowledgeBaseID: kb, SearchPath: DefaultSearchPath}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, cliErr := client.Search(context.Background(), "校历", 1, "campus-calendar")
+	if cliErr != nil || len(result.Hits) != 1 || result.Hits[0].KnowledgeID != "target-knowledge" {
+		t.Fatalf("search during a growing source list failed: %d hits, error %v", len(result.Hits), cliErr)
+	}
+}
+
+func TestDiversifyCampusHitsLeadsWithDistinctDocuments(t *testing.T) {
+	hits := []Hit{
+		{Source: "peiyang-wiki-public", ItemID: "hours", ChunkID: "hours-1", Score: 0.90, QuotedText: "07:00"},
+		{Source: "peiyang-wiki-public", ItemID: "hours", ChunkID: "hours-2", Score: 0.80, QuotedText: "same page"},
+		{Source: "twt-studyroom-catalog", ItemID: "room", ChunkID: "room-1", Score: 0.75, QuotedText: "room"},
+	}
+	got := diversifyCampusHits(hits, 2)
+	if len(got) != 2 || got[0].ChunkID != "hours-1" || got[1].ChunkID != "room-1" {
+		t.Fatalf("distinct documents were not preferred: %#v", got)
+	}
+	filled := diversifyCampusHits(hits, 3)
+	if len(filled) != 3 || filled[2].ChunkID != "hours-2" {
+		t.Fatalf("extra chunk was not used to fill the limit: %#v", filled)
+	}
+}
+
+func TestFuseCampusHitsPrefersOfficialPageWithinScoreMargin(t *testing.T) {
+	vector := []Hit{
+		{Source: "wepeiyang-lake-posts", ItemID: "post", KnowledgeID: "k-post", ChunkID: "post-1", Score: 0.667, QuotedText: "forum"},
+		{Source: "peiyang-wiki-public", ItemID: "calendar", KnowledgeID: "k-wiki", ChunkID: "wiki-1", Score: 0.649, QuotedText: "wiki"},
+	}
+	got := fuseCampusHits(vector, nil, 2, "校历")
+	if len(got) != 2 || got[0].ChunkID != "wiki-1" || got[0].Score != 0.649 {
+		t.Fatalf("official page was not preferred without rewriting its score: %#v", got)
+	}
+	vector[0].Score = 0.80
+	got = fuseCampusHits(vector, nil, 2, "校历")
+	if len(got) != 2 || got[0].ChunkID != "post-1" {
+		t.Fatalf("clearly stronger forum hit was buried: %#v", got)
+	}
+}
+
+func TestFuseCampusHitsLiftsStudyroomCatalogForRoomQueries(t *testing.T) {
+	vector := []Hit{
+		{Source: "wepeiyang-lake-posts", ItemID: "post", KnowledgeID: "k-post", ChunkID: "post-1", Score: 0.688, QuotedText: "forum"},
+		{Source: "twt-studyroom-catalog", ItemID: "room", KnowledgeID: "k-room", ChunkID: "room-1", Score: 0.588, QuotedText: "room"},
+	}
+	got := fuseCampusHits(vector, nil, 2, "空教室")
+	if len(got) != 2 || got[0].ChunkID != "room-1" || got[0].Score != 0.588 {
+		t.Fatalf("studyroom catalog was not preferred for an empty-room query: %#v", got)
+	}
+	plain := fuseCampusHits(vector, nil, 2, "食堂")
+	if len(plain) != 2 || plain[0].ChunkID != "post-1" {
+		t.Fatalf("studyroom catalog was boosted for an unrelated query: %#v", plain)
 	}
 }
