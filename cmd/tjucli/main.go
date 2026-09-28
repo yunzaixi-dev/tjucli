@@ -91,6 +91,8 @@ func (r *runner) run(ctx context.Context, args []string) int {
 		return r.runCourse(ctx, args[1:], jsonOutput)
 	case "knowledge":
 		return r.runKnowledge(ctx, args[1:], jsonOutput)
+	case "tools":
+		return r.runTools(ctx, args[1:], jsonOutput)
 	default:
 		return r.fail(jsonOutput, tjucli.NewFlagError(fmt.Sprintf("unknown command %q", args[0])))
 	}
@@ -181,7 +183,7 @@ func (r *runner) runCapabilities(args []string, jsonOutput bool) int {
 	}
 	data := tjucli.CapabilitiesResult{
 		Provider: "public-course-sharing",
-		Commands: []string{"course ls", "course search", "course download", "knowledge search"},
+		Commands: []string{"course ls", "course search", "course download", "knowledge search", "tools list", "tools call"},
 	}
 	if jsonOutput {
 		return r.success(data, struct{}{})
@@ -429,10 +431,12 @@ Usage:
   tjucli capabilities [--json]
   tjucli course <command> [arguments] [--json]
   tjucli knowledge search QUERY [--limit N] [--source SOURCE] [--json]
+  tjucli tools list|call NAME [--args JSON] [--json]
   tjucli help
 
 Run "tjucli course --help" for course commands.
 Run "tjucli knowledge --help" for knowledge commands.
+Run "tjucli tools --help" for the product tools of an Agent turn.
 `
 
 const knowledgeHelp = `Usage: tjucli knowledge <command> [arguments] [--json]

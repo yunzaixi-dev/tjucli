@@ -1,6 +1,6 @@
 ---
 name: tjucli
-description: Queries Tianjin University course-sharing directories and downloads public course materials with tjucli. Use when users ask to find course notes, browse shared materials, or download a course resource to their workspace.
+description: Reads and writes the user's TJUClaw notes, queries campus services and course materials through the product tools, and browses or downloads public course-sharing materials with tjucli. Use for any request about the user's notes, timetable, exams, study rooms, campus forum, course materials or images.
 compatibility: Requires tjucli on PATH and a writable workspace; remote mode requires provisioned tool-server configuration, local mode requires HTTPS access to the course provider.
 ---
 
@@ -17,6 +17,29 @@ tjucli course --help
 Current commands cover public course-sharing materials. Personal schedules,
 grades, borrowing records and campus write operations are not provided by this
 skill. Do not invent a command, session or successful campus action.
+
+## Product tools (the user's notes and campus data)
+
+Inside a TJUClaw Agent turn, `tjucli tools` reaches the same tools the product
+Agent uses, acting as the signed-in user. The user's notes live in the TJUClaw
+library, not in the current Git directory: use these tools, not files, when
+the user talks about their notes.
+
+```bash
+tjucli tools list --json
+tjucli tools call list_tree --json
+tjucli tools call read_entry --args '{"id":"<id from list_tree>"}' --json
+tjucli tools call create_entry --args '{"kind":"note","title":"复习提纲","body":"# 电路\n- KCL"}' --json
+tjucli tools call update_entry --args '{"id":"<id>","body":"<full new Markdown>"}' --json
+```
+
+Run `tools list` first and pass exactly the parameters its JSON schema names.
+Campus tools (timetable, exams, study rooms, forum, semester), course material
+search and image reading appear in the same list when the server offers them.
+For long Markdown, write the JSON to a file and pass `--args -` with the file
+on standard input. Only report a note as saved after `create_entry` or
+`update_entry` returned its id. Deleting needs the user's explicit request.
+`tool_grant_invalid` means the turn has ended; do not retry in a loop.
 
 ## Execution mode
 
