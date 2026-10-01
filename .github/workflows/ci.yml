@@ -25,7 +25,8 @@ env:
 jobs:
   check-and-test:
     name: Check, test, and build CLI and tool server
-    runs-on: tjucli
+    # The repository is public: standard GitHub-hosted runners are free and include gcc for the race detector.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout source
@@ -43,10 +44,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Install C compiler for race detector
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc libc6-dev
 
       - name: Verify formatting
         run: |
