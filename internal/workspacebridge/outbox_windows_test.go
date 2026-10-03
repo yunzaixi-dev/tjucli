@@ -57,7 +57,9 @@ func setSharedOutboxACL(t *testing.T, path string, directory bool) {
 	if directory {
 		flags |= syscall.FILE_FLAG_BACKUP_SEMANTICS
 	}
-	handle, err := syscall.CreateFile(name, writeDAC,
+	// SetSecurityInfo reads the current descriptor too, so READ_CONTROL is needed.
+	const readControl = 0x00020000
+	handle, err := syscall.CreateFile(name, writeDAC|readControl,
 		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
 		nil, syscall.OPEN_EXISTING, flags, 0)
 	if err != nil {
@@ -72,7 +74,7 @@ func setSharedOutboxACL(t *testing.T, path string, directory bool) {
 	status, _, _ := advapi.NewProc("SetSecurityInfo").Call(
 		uintptr(handle), seFileObject, daclSecurityInfo|protectDACLInfo, 0, 0, uintptr(dacl), 0)
 	if status != 0 {
-		t.Fatal("ACL test application failed")
+		t.Fatalf("ACL test application failed: status %d", status)
 	}
 }
 

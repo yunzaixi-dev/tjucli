@@ -200,6 +200,13 @@ func ensurePrivatePermissions(f *os.File, directory bool) error {
 	if err != nil {
 		return err
 	}
+	// An object that is already private is left as it is. Rewriting a
+	// directory's DACL makes Windows propagate inheritance to its existing
+	// children, which can race with a concurrent writer securing its new file
+	// in that directory and strip that file's protection.
+	if checkWindowsACL(syscall.Handle(f.Fd()), directory, identity, false) == nil {
+		return nil
+	}
 	existing, err := readFileSecurity(syscall.Handle(f.Fd()))
 	if err != nil {
 		return err
