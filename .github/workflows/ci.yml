@@ -24,7 +24,7 @@ env:
 
 jobs:
   check-and-test:
-    name: Check, test, and build CLI and tool server
+    name: Check, test, and build product CLI, campus CLI and tool server
     # The repository is public: standard GitHub-hosted runners are free and include gcc for the race detector.
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -60,16 +60,18 @@ jobs:
       - name: Go race tests
         run: go test -race ./...
 
-      - name: Build tjucli
+      - name: Build CLI binaries
         run: |
           CLI_VER=$(node -e "console.log(require('./package.json').version)")
           mkdir -p bin
           go build -trimpath -ldflags="-X main.version=${CLI_VER}" -o bin/tjucli ./cmd/tjucli
           go build -trimpath -o bin/tjucli-server ./cmd/tjucli-server
+          go build -trimpath -ldflags="-X main.version=${CLI_VER}" -o bin/tjuclaw ./cmd/tjuclaw
 
       - name: Verify binary output
         run: |
           ./bin/tjucli version --json
+          ./bin/tjuclaw version
 
       - name: Upload tjucli artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -78,5 +80,27 @@ jobs:
           path: |
             bin/tjucli
             bin/tjucli-server
+            bin/tjuclaw
           if-no-files-found: error
           retention-days: 7
+
+  windows-private-state:
+    name: Native Windows private configuration and completion outbox
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Checkout public source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test actual Windows ACL and private-state behavior
+        run: go test -count=1 ./internal/workspaceconfig ./internal/workspacebridge
+      - name: Test unsupported host execution fails before state mutation
+        run: go test -count=1 ./cmd/tjuclaw ./internal/workspaceruntime -run 'Test(LocalCapabilityPlatformGate|NonUnixPromptExecutionFailsBeforeCredentialsStateOrSession)$'
+      - name: Vet private-state packages
+        run: go vet ./cmd/tjuclaw ./internal/workspaceconfig ./internal/workspacebridge ./internal/workspaceruntime
