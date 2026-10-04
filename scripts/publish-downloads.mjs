@@ -1,4 +1,5 @@
-// Publishes the CLI downloads to R2 under cli/:
+// Publishes the CLI downloads to R2 under cli/ (run by the client repository's
+// "Publish CLI Downloads" workflow, which holds the R2 credentials):
 //   cli/v<version>/tjuclaw-<os>-<arch>[.exe], cli/v<version>/SHA256SUMS,
 //   cli/install.sh, cli/install.ps1, cli/latest.json, cli/LATEST.
 // Run after scripts/build-downloads.sh. A version already published is left
@@ -11,6 +12,9 @@ import { publicObjectUrl, r2Exists, r2Put, readR2Config, sha256Hex } from './r2.
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const TARGETS = ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64', 'windows-amd64', 'windows-arm64'];
+
+// The R2 helper takes the fetch to use; every request gets a timeout.
+const timedFetch = (url, options = {}, timeoutMs = 30000) => fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
 
 export const binaryName = target => `tjuclaw-${target}${target.startsWith('windows-') ? '.exe' : ''}`;
 
@@ -45,14 +49,14 @@ export function latestManifest(version, base, files, now = new Date()) {
   };
 }
 
-async function main() {
+export async function publish({ env = process.env, fetchFn = timedFetch, log = console.log } = {}) {
   const version = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).version;
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`invalid version ${version}`);
-  const r2 = readR2Config();
+  const r2 = readR2Config(env);
   const base = publicObjectUrl(r2, 'cli');
   const sumsKey = `cli/v${version}/SHA256SUMS`;
-  if (await r2Exists(r2, sumsKey)) {
-    console.log(`tjuclaw ${version} is already published; nothing to do.`);
+  if (await r2Exists(r2, sumsKey, fetchFn)) {
+    log(`tjuclaw ${version} is already published; nothing to do.`);
     return;
   }
   const present = new Set(readdirSync(resolve(root, 'dist')));
@@ -71,18 +75,18 @@ async function main() {
     await r2Put(r2, `cli/v${version}/${file.name}`, file.bytes, {
       contentType: 'application/octet-stream', cacheControl: immutable,
       contentDisposition: `attachment; filename="${file.target.startsWith('windows-') ? 'tjuclaw.exe' : 'tjuclaw'}"`,
-    });
-    console.log(`uploaded ${file.name}`);
+    }, fetchFn);
+    log(`uploaded ${file.name}`);
   }
-  await r2Put(r2, sumsKey, Buffer.from(checksums(files)), { contentType: 'text/plain; charset=utf-8', cacheControl: immutable });
+  await r2Put(r2, sumsKey, Buffer.from(checksums(files)), { contentType: 'text/plain; charset=utf-8', cacheControl: immutable }, fetchFn);
   for (const script of ['install.sh', 'install.ps1']) {
-    await r2Put(r2, `cli/${script}`, readFileSync(resolve(root, 'install', script)), { contentType: 'text/plain; charset=utf-8', cacheControl: fresh });
+    await r2Put(r2, `cli/${script}`, readFileSync(resolve(root, 'install', script)), { contentType: 'text/plain; charset=utf-8', cacheControl: fresh }, fetchFn);
   }
-  await r2Put(r2, 'cli/latest.json', Buffer.from(JSON.stringify(latestManifest(version, base, files), null, 2) + '\n'), { contentType: 'application/json', cacheControl: fresh });
-  await r2Put(r2, 'cli/LATEST', Buffer.from(`${version}\n`), { contentType: 'text/plain; charset=utf-8', cacheControl: fresh });
-  console.log(`published tjuclaw ${version}: ${base}/install.sh`);
+  await r2Put(r2, 'cli/latest.json', Buffer.from(JSON.stringify(latestManifest(version, base, files), null, 2) + '\n'), { contentType: 'application/json', cacheControl: fresh }, fetchFn);
+  await r2Put(r2, 'cli/LATEST', Buffer.from(`${version}\n`), { contentType: 'text/plain; charset=utf-8', cacheControl: fresh }, fetchFn);
+  log(`published tjuclaw ${version}: ${base}/install.sh`);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main().catch(error => { console.error(error.message); process.exit(1); });
+  publish().catch(error => { console.error(error.message); process.exit(1); });
 }

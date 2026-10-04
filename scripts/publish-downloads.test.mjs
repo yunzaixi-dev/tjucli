@@ -35,3 +35,35 @@ test('the built binaries pass the leak scan', { skip: !existsSync(resolve(root, 
     assert.deepEqual(scanBinary(readFileSync(resolve(root, 'dist', binaryName(target)))), [], target);
   }
 });
+
+test('publish uploads binaries, then checksums and scripts, and moves LATEST last; a published version is skipped', { skip: !existsSync(resolve(root, 'dist')) && 'run scripts/build-downloads.sh first' }, async () => {
+  const { publish } = await import('./publish-downloads.mjs');
+  const env = {
+    R2_ENDPOINT: 'https://account.r2.cloudflarestorage.com', R2_BUCKET: 'tjuclaw-release',
+    R2_PUBLIC_URL: 'https://dl.example', R2_ACCESS_KEY_ID: 'id', R2_SECRET_ACCESS_KEY: 'secret',
+  };
+  const stored = new Map();
+  const puts = [];
+  const fetchFn = async (url, options) => {
+    const key = decodeURIComponent(new URL(url).pathname.replace('/tjuclaw-release/', ''));
+    if (options.method === 'HEAD') return { ok: stored.has(key), status: stored.has(key) ? 200 : 404 };
+    if (options.method === 'PUT') {
+      stored.set(key, { body: options.body, type: options.headers['content-type'] });
+      puts.push(key);
+      return { ok: true, status: 200 };
+    }
+    throw new Error(`unexpected ${options.method}`);
+  };
+  await publish({ env, fetchFn, log: () => {} });
+  const version = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).version;
+  assert.equal(puts.length, 6 + 1 + 2 + 2);
+  assert.deepEqual(puts.slice(0, 6), TARGETS.map(target => `cli/v${version}/${binaryName(target)}`));
+  assert.equal(puts.at(-1), 'cli/LATEST');
+  assert.equal(String(stored.get('cli/LATEST').body), `${version}\n`);
+  assert.equal(stored.get('cli/install.ps1').type, 'text/plain; charset=utf-8');
+  const manifest = JSON.parse(String(stored.get('cli/latest.json').body));
+  assert.equal(manifest.files['linux-amd64'].url, `https://dl.example/cli/v${version}/tjuclaw-linux-amd64`);
+  puts.length = 0;
+  await publish({ env, fetchFn, log: () => {} });
+  assert.equal(puts.length, 0, 'a published version is not uploaded again');
+});
