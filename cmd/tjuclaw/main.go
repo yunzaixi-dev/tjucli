@@ -78,6 +78,9 @@ func (r runner) run(ctx context.Context, args []string) int {
 	if args[0] == "version" && len(args) == 1 {
 		return r.respond(map[string]string{"version": version, "product": "tjuclaw"}, "")
 	}
+	if args[0] == "update" {
+		return r.update(ctx, args[1:])
+	}
 	if args[0] == "workspace" {
 		return r.workspace(dir, args[1:])
 	}
@@ -518,6 +521,7 @@ func (r runner) connect(ctx context.Context, client *workspacebridge.Client, dir
 		return errors.New("workspace_connection_output_failed")
 	}
 	_, _ = io.WriteString(r.errOut, "工作空间连接已建立；关闭进程停止接收新调用，未授权能力不会执行。\n")
+	go checkLatestVersionNotice(ctx, r.errOut, version)
 	connectCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	heartbeatErr := make(chan error, 1)

@@ -30,7 +30,10 @@ irm https://tjuclaw-release.zaixi.dev/cli/install.ps1 | iex
 脚本下载对应平台的 `tjuclaw`，先按发布的 `SHA256SUMS` 校验，再安装到
 `~/.local/bin`（Windows 为 `%LOCALAPPDATA%\Programs\tjuclaw`，并加入用户 PATH）。
 可用环境变量 `TJUCLAW_VERSION` 指定版本、`TJUCLAW_INSTALL_DIR` 指定目录。
-重新运行同一命令即可升级。Windows 与 Linux 桌面客户端 0.1.1 起也内置了 `tjuclaw`。
+升级运行 `tjuclaw update`：它读取发布清单，下载本平台的新版本，按 SHA256 校验后原地替换，
+从不降级；`tjuclaw update --check` 只检查不安装。`tjuclaw connect` 启动时也会提示新版本。
+Windows 与 Linux 桌面客户端 0.1.1 起也内置了 `tjuclaw`，这一份随桌面客户端更新，
+`tjuclaw update` 不会替换它。
 
 ## 从源码构建
 
