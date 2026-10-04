@@ -129,6 +129,7 @@ tjuclaw --config-dir "$HOME/.config/tjuclaw/study" \
 - `claude.prompt`
 - `codex.prompt`
 - `mcp.call`
+- `terminal.open`（远程终端，见下文）
 
 确认工具已安装、配置正确并了解宿主机风险后，只显式开放需要的能力：
 
@@ -148,6 +149,29 @@ tjuclaw --config-dir "$HOME/.config/tjuclaw/study" workspace allow
 服务端检查目标发布的能力，本地执行器还会再次检查本机许可；
 本地 `run` 也不绕过能力检查。许可不自动同意 Claude/Codex 的审批，
 不关闭它们的 sandbox，也不保证某能力已经具备可用的执行适配。
+
+## 远程终端
+
+开放 `terminal.open` 后，在 TJUClaw 网页或客户端“工作”侧栏点主机行的终端按钮，
+或在项目菜单选“在终端中打开”，就会在这台电脑上启动你的登录 shell
+（`$SHELL -l`，环境变量 `TERM=xterm-256color`），终端停靠在页面下方。
+
+```bash
+tjuclaw --config-dir "$HOME/.config/tjuclaw/study" workspace allow pi.prompt terminal.open
+tjuclaw --config-dir "$HOME/.config/tjuclaw/study" connect
+```
+
+- shell 只在 `workspace init --root` 选定的根目录内启动；项目路径（解析符号链接后）
+  不在根目录内时拒绝。shell 启动后拥有你本机账号的全部权限，可以 `cd` 到任何地方，
+  所以只在信任的同账号环境开放。
+- 每次打开都会重新读取本机许可；撤销 `terminal.open` 后新终端立即被拒绝。
+  已运行的 `connect` 在开放后无需重启。
+- 每台电脑最多同时 4 个终端；闲置 30 分钟自动关闭；关闭标签页会挂断 shell。
+- 终端经 API 中转（HTTPS 长轮询，无需开放入站端口）。中转只在内存中保留最近
+  1 MB 输出，不写入磁盘。API 重启会结束所有终端。
+- Linux 与 macOS 使用伪终端，支持 vim、htop 等全屏程序与窗口大小同步。
+  Windows 暂为简化模式（PowerShell 经管道运行）：命令可用，但没有输入回显、
+  行编辑和全屏程序。
 修改许可会影响后续执行，不保证中断已经启动的调用，也不能收回已发送的内容；
 需要停止当前 connector 时应明确终止该进程。
 当前 Pi 在明确授权后启用完整宿主机文件与 shell 工具，没有内置逐次审批或

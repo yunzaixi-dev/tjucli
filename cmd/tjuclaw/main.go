@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/yunzaixi-dev/tjucli/internal/workspacebridge"
 	"github.com/yunzaixi-dev/tjucli/internal/workspaceconfig"
 	"github.com/yunzaixi-dev/tjucli/internal/workspaceruntime"
+	"github.com/yunzaixi-dev/tjucli/internal/workspaceterminal"
 )
 
 var version = "dev"
@@ -539,6 +541,20 @@ func (r runner) connect(ctx context.Context, client *workspacebridge.Client, dir
 			}
 		}
 	}()
+	// Terminals start serving once the owner allows them, even mid-connection.
+	terminals := false
+	serveTerminals := func(config workspaceconfig.Config) {
+		if terminals || !slices.Contains(config.AllowedCapabilities, workspaceterminal.Capability) {
+			return
+		}
+		terminals = true
+		host := &workspaceterminal.Host{Bridge: client, WorkspaceID: config.ID, Settings: func() (bool, string, error) {
+			config, err := current()
+			return err == nil && slices.Contains(config.AllowedCapabilities, workspaceterminal.Capability), config.Root, err
+		}}
+		go host.Run(connectCtx)
+	}
+	serveTerminals(initial)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -551,9 +567,11 @@ func (r runner) connect(ctx context.Context, client *workspacebridge.Client, dir
 				return nil
 			}
 		case <-ticker.C:
-			if _, err := current(); err != nil {
+			config, err := current()
+			if err != nil {
 				return err
 			}
+			serveTerminals(config)
 			if _, err := client.StepDurable(connectCtx, initial.ID, execute, outbox); err != nil && connectCtx.Err() == nil {
 				return err
 			}

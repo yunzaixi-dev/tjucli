@@ -207,7 +207,7 @@ func Validate(c Config) error {
 	caps := map[string]bool{}
 	for _, capability := range c.AllowedCapabilities {
 		switch capability {
-		case "pi.prompt", "claude.prompt", "codex.prompt", "mcp.call":
+		case "pi.prompt", "claude.prompt", "codex.prompt", "mcp.call", "terminal.open":
 		default:
 			return errors.New("unsupported workspace capability")
 		}
