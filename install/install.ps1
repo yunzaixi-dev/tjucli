@@ -46,7 +46,8 @@ try {
   $expected = $null
   foreach ($line in Get-Content $sums) {
     $parts = $line -split '\s+'
-    if ($parts.Count -ge 2 -and $parts[1] -eq $name) { $expected = $parts[0].ToLowerInvariant() }
+    # Accept both checksum line styles: "<hash>  name" and "<hash> *name".
+    if ($parts.Count -ge 2 -and $parts[1].TrimStart('*') -eq $name) { $expected = $parts[0].ToLowerInvariant() }
   }
   if (-not $expected) { Fail "校验文件里没有 $name" }
   $actual = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLowerInvariant()

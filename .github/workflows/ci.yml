@@ -152,13 +152,23 @@ jobs:
           (cd site/cli/v0.0.0 && sha256sum tjuclaw-windows-amd64.exe > SHA256SUMS)
           echo 0.0.0 > site/cli/LATEST
           cp install/install.ps1 site/cli/
-          nohup python -m http.server 28765 --bind 127.0.0.1 --directory site > /dev/null 2>&1 &
+          # Serve text as R2 does (UTF-8 declared); Windows PowerShell 5.1
+          # decodes an undeclared response as Latin-1.
+          cat > serve.py <<'PY'
+          import functools, http.server
+          class Handler(http.server.SimpleHTTPRequestHandler):
+              extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map, '': 'text/plain; charset=utf-8', '.ps1': 'text/plain; charset=utf-8'}
+          http.server.ThreadingHTTPServer(('127.0.0.1', 28765), functools.partial(Handler, directory='site')).serve_forever()
+          PY
+          nohup python serve.py > /dev/null 2>&1 &
           sleep 2
       - name: irm | iex installs, adds the user PATH and runs
         shell: powershell
         run: |
           $env:TJUCLAW_DOWNLOAD_URL = 'http://127.0.0.1:28765/cli'
-          irm http://127.0.0.1:28765/cli/install.ps1 | iex
+          $script = irm http://127.0.0.1:28765/cli/install.ps1
+          if ($script -notmatch '安装失败') { throw 'install.ps1 was not decoded as UTF-8' }
+          $script | iex
           $exe = Join-Path $env:LOCALAPPDATA 'Programs\tjuclaw\tjuclaw.exe'
           $out = & $exe version
           if ($out -notmatch '"version":"0.0.0"') { throw "unexpected: $out" }

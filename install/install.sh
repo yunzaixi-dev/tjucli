@@ -66,7 +66,8 @@ name="tjuclaw-$os-$arch"
 say "正在下载 tjuclaw $version（$os/$arch）…"
 fetch "$base/v$version/$name" "$tmp/tjuclaw" || fail "下载失败：$base/v$version/$name"
 fetch "$base/v$version/SHA256SUMS" "$tmp/SHA256SUMS" || fail "无法下载校验文件"
-expected=$(awk -v n="$name" '$2 == n { print $1 }' "$tmp/SHA256SUMS")
+# Accept both checksum line styles: "<hash>  name" and "<hash> *name".
+expected=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1 }' "$tmp/SHA256SUMS")
 [ -n "$expected" ] || fail "校验文件里没有 $name"
 [ "$(digest "$tmp/tjuclaw")" = "$expected" ] || fail "校验失败，下载内容与发布不一致，已停止安装"
 
