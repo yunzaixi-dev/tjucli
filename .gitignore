@@ -4,3 +4,4 @@ data/
 .env.*
 *.log
 course-readme.md
+dist/

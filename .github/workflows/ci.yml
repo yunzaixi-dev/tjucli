@@ -104,3 +104,108 @@ jobs:
         run: go test -count=1 ./cmd/tjuclaw ./internal/workspaceruntime -run 'Test(LocalCapabilityPlatformGate|NonUnixPromptExecutionFailsBeforeCredentialsStateOrSession)$'
       - name: Vet private-state packages
         run: go vet ./cmd/tjuclaw ./internal/workspaceconfig ./internal/workspacebridge ./internal/workspaceruntime
+
+  downloads:
+    name: Build every download and test the Unix installer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout public source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Cross-compile tjuclaw for six platforms
+        run: bash scripts/build-downloads.sh
+      - name: Leak scan, checksums and manifest
+        run: node --test scripts/publish-downloads.test.mjs
+      - name: install.sh end to end (bash, Alpine busybox, Debian dash)
+        run: bash scripts/test-install.sh
+      - name: Keep the downloads for publishing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tjuclaw-downloads-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  install-windows:
+    name: install.ps1 on Windows PowerShell 5.1
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Checkout public source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Serve a local download layout
+        shell: bash
+        run: |
+          mkdir -p site/cli/v0.0.0
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.version=0.0.0" -o site/cli/v0.0.0/tjuclaw-windows-amd64.exe ./cmd/tjuclaw
+          (cd site/cli/v0.0.0 && sha256sum tjuclaw-windows-amd64.exe > SHA256SUMS)
+          echo 0.0.0 > site/cli/LATEST
+          cp install/install.ps1 site/cli/
+          nohup python -m http.server 28765 --bind 127.0.0.1 --directory site > /dev/null 2>&1 &
+          sleep 2
+      - name: irm | iex installs, adds the user PATH and runs
+        shell: powershell
+        run: |
+          $env:TJUCLAW_DOWNLOAD_URL = 'http://127.0.0.1:28765/cli'
+          irm http://127.0.0.1:28765/cli/install.ps1 | iex
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\tjuclaw\tjuclaw.exe'
+          $out = & $exe version
+          if ($out -notmatch '"version":"0.0.0"') { throw "unexpected: $out" }
+          if (([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -notcontains (Split-Path $exe)) { throw 'user PATH not updated' }
+          irm http://127.0.0.1:28765/cli/install.ps1 | iex
+          Write-Host "reinstall over the existing binary: ok"
+
+  publish-downloads:
+    name: Publish downloads and install scripts to R2
+    needs: [check-and-test, downloads, install-windows]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release' && github.repository == 'yunzaixi-dev/tjucli'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: publish-downloads
+      cancel-in-progress: false
+    steps:
+      - name: Checkout public source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Fetch the tested downloads
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: tjuclaw-downloads-${{ github.sha }}
+          path: dist
+      - name: Publish (skips a version already published)
+        env:
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          if [ -z "$R2_ACCESS_KEY_ID" ] || [ -z "$R2_SECRET_ACCESS_KEY" ]; then
+            echo "::notice::R2 credentials are not configured for this repository; downloads were built and tested but not published."
+            exit 0
+          fi
+          node scripts/publish-downloads.mjs
