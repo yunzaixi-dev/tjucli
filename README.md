@@ -4,6 +4,18 @@ Standalone Go CLI for Tianjin University data tools and campus services.
 The current implemented provider covers the public course-sharing catalog at `cs.tjuse.com`.
 No campus credentials or private student authentication tokens are required.
 
+## TJUClaw CLI (`tjuclaw`)
+
+Connects your computer to TJUClaw so you can open its terminal from the web or
+your phone. Install on macOS or Linux:
+
+```bash
+curl -fsSL https://tjuclaw-release.zaixi.dev/cli/install.sh | sh
+```
+
+On Windows, in PowerShell: `irm https://tjuclaw-release.zaixi.dev/cli/install.ps1 | iex`.
+See [WORKSPACES.md](WORKSPACES.md) to connect and allow remote terminals.
+
 ## Installation & Build
 
 Requires Go 1.26+.

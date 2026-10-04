@@ -13,7 +13,26 @@
 - **`tjucli-server`**：校园工具 HTTP 服务，使用独立的 grants 授权机制。
   见 [TOOL_SERVER.md](TOOL_SERVER.md)。它的 grants token 不是系统工作空间连接 token。
 
-## 构建与安装可用性
+## 安装
+
+macOS 与 Linux（x64、arm64）：
+
+```bash
+curl -fsSL https://tjuclaw-release.zaixi.dev/cli/install.sh | sh
+```
+
+Windows（x64、arm64），在 PowerShell 中：
+
+```powershell
+irm https://tjuclaw-release.zaixi.dev/cli/install.ps1 | iex
+```
+
+脚本下载对应平台的 `tjuclaw`，先按发布的 `SHA256SUMS` 校验，再安装到
+`~/.local/bin`（Windows 为 `%LOCALAPPDATA%\Programs\tjuclaw`，并加入用户 PATH）。
+可用环境变量 `TJUCLAW_VERSION` 指定版本、`TJUCLAW_INSTALL_DIR` 指定目录。
+重新运行同一命令即可升级。Windows 与 Linux 桌面客户端 0.1.1 起也内置了 `tjuclaw`。
+
+## 从源码构建
 
 从本 CLI 仓库目录执行，需要 `go.mod` 指定的 Go 1.27.0、
 Node.js（读取 `package.json` 版本）和 Task：
@@ -36,8 +55,8 @@ go build -trimpath \
 
 以下示例假定你已把自己构建的 `tjuclaw` 放入 `PATH`；
 也可把命令中的 `tjuclaw` 替换成该二进制的绝对路径。
-这是本机源码构建，不是原生安装包发布说明。
-CI 将新二进制纳入现有构建产物，不改变发布策略，也不新增全平台分发承诺。
+发布的下载由 CI 在 `release` 分支版本号变化时构建（`scripts/build-downloads.sh`），
+发布前扫描二进制，确保不含私有仓库、内网地址、本机路径或密钥。
 
 ```bash
 tjuclaw version
