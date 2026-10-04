@@ -167,7 +167,9 @@ jobs:
         run: |
           $env:TJUCLAW_DOWNLOAD_URL = 'http://127.0.0.1:28765/cli'
           $script = irm http://127.0.0.1:28765/cli/install.ps1
-          if ($script -notmatch '安装失败') { throw 'install.ps1 was not decoded as UTF-8' }
+          # "安装失败", spelled in ASCII: this step file itself is read in the ANSI code page.
+          $marker = -join ([char]0x5B89, [char]0x88C5, [char]0x5931, [char]0x8D25)
+          if (-not $script.Contains($marker)) { throw 'install.ps1 was not decoded as UTF-8' }
           $script | iex
           $exe = Join-Path $env:LOCALAPPDATA 'Programs\tjuclaw\tjuclaw.exe'
           $out = & $exe version
