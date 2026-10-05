@@ -808,18 +808,32 @@ func noteFits(data []byte) bool {
 	return validText(data) && utf8.RuneCount(data) <= maxNoteRunes
 }
 
-// fatal is an error that stops the whole push: signed out, offline or
-// canceled. Anything else concerns one item, which is reported and skipped.
+// fatal is an error that stops the whole push: signed out or canceled.
+// Anything else concerns one item, which is reported and skipped.
 func fatal(ctx context.Context, err error) bool {
 	if ctx.Err() != nil {
 		return true
 	}
 	var remote *account.RemoteError
-	if errors.As(err, &remote) {
-		return remote.Status == 401 || remote.Status == 403 || remote.Status >= 500 && remote.Status != 503
-	}
-	return true // transport errors: the API is unreachable
+	return errors.As(err, &remote) && (remote.Status == 401 || remote.Status == 403)
 }
+
+// transient is a failure that says nothing about the item: the edge, the
+// network or the server, not the request.
+func transient(err error) bool {
+	var remote *account.RemoteError
+	if errors.As(err, &remote) {
+		return remote.Status >= 500 || remote.Status == 429
+	}
+	return true
+}
+
+// maxTransientInARow stops a push once this many items in a row failed for
+// reasons that are not theirs: the connection is down, not the items.
+const maxTransientInARow = 8
+
+// remoteKey identifies an entry the way a new local path would create it.
+func remoteKey(parent, kind, title string) string { return parent + "\x00" + kind + "\x00" + title }
 
 // Push sends local changes. Each change carries the version it was based on;
 // a remote change since then is a conflict and that path is left unsent. A
@@ -847,7 +861,26 @@ func (c *Copy) Push(ctx context.Context, dryRun bool, progress Progress) (PushRe
 	}
 	defer func() { _ = c.save() }()
 	var mu sync.Mutex // guards res, c.State and the save counter in the upload phase
-	done, total, sinceSave := 0, len(work), 0
+	done, total, sinceSave, inARow := 0, len(work), 0, 0
+	// Entries on the server that this copy does not track yet: an earlier
+	// push that lost its reply (a 504 from the edge) may have created them.
+	// A new local item that matches one is adopted instead of sent again.
+	adoptable := map[string]Entry{}
+	if hasAdds(work) {
+		remote, err := c.remoteEntries(ctx)
+		if err != nil {
+			return res, err
+		}
+		known := map[string]bool{}
+		for _, t := range c.State.Entries {
+			known[t.ID] = true
+		}
+		for _, e := range remote {
+			if !known[e.ID] && (e.Kind == KindNote || e.Kind == KindFile) {
+				adoptable[remoteKey(e.ParentID, e.Kind, e.Title)] = e
+			}
+		}
+	}
 	step := func() {
 		done++
 		if sinceSave++; sinceSave >= saveEveryItems {
@@ -861,6 +894,7 @@ func (c *Copy) Push(ctx context.Context, dryRun bool, progress Progress) (PushRe
 	// handle records an item's error; it returns the error only when fatal.
 	handle := func(p string, err error) error {
 		if err == nil {
+			inARow = 0
 			return nil
 		}
 		if account.IsCode(err, "entry_conflict") {
@@ -869,6 +903,11 @@ func (c *Copy) Push(ctx context.Context, dryRun bool, progress Progress) (PushRe
 		}
 		if fatal(ctx, err) {
 			return fmt.Errorf("%s: %w", p, err)
+		}
+		if transient(err) {
+			if inARow++; inARow >= maxTransientInARow {
+				return fmt.Errorf("%s: %w", p, errors.New("api_unreachable"))
+			}
 		}
 		var remote *account.RemoteError
 		id := err.Error()
@@ -927,11 +966,22 @@ func (c *Copy) Push(ctx context.Context, dryRun bool, progress Progress) (PushRe
 				var tracked Tracked
 				var data []byte
 				err := perr
+				adopted := false
 				if err == nil {
-					tracked, data, err = c.pushNew(ctx, ch, parent)
+					mu.Lock()
+					candidate, found := adoptable[remoteKey(parent, ch.Kind, newTitle(ch))]
+					delete(adoptable, remoteKey(parent, ch.Kind, newTitle(ch)))
+					mu.Unlock()
+					if found {
+						tracked, data, adopted = c.adopt(ctx, ch, candidate)
+					}
+					if !adopted {
+						tracked, data, err = c.pushNew(ctx, ch, parent)
+					}
 				}
 				mu.Lock()
 				if err == nil {
+					inARow = 0
 					c.State.Entries[ch.Path] = tracked
 					if tracked.Kind == KindNote {
 						_ = c.writeBase(tracked.ID, data)
@@ -1070,6 +1120,44 @@ func (c *Copy) pushEdit(ctx context.Context, ch Change, res *PushResult) error {
 	}
 	res.Updated = append(res.Updated, ch.Path)
 	return nil
+}
+
+func hasAdds(work []Change) bool {
+	for _, ch := range work {
+		if ch.Op == "added" && ch.Kind != KindFolder {
+			return true
+		}
+	}
+	return false
+}
+
+// newTitle is the title a new local path gets in the library.
+func newTitle(ch Change) string {
+	if ch.Kind == KindNote {
+		return noteTitle(path.Base(ch.Path))
+	}
+	return path.Base(ch.Path)
+}
+
+// adopt takes an untracked server entry as this local item when it holds the
+// same content: a note with the same text, a file of the same size.
+func (c *Copy) adopt(ctx context.Context, ch Change, e Entry) (Tracked, []byte, bool) {
+	data, err := os.ReadFile(c.abs(ch.Path))
+	if err != nil {
+		return Tracked{}, nil, false
+	}
+	switch e.Kind {
+	case KindFile:
+		if e.Size != len(data) {
+			return Tracked{}, nil, false
+		}
+	case KindNote:
+		full, err := c.remoteEntry(ctx, e.ID)
+		if err != nil || full.Body != string(data) {
+			return Tracked{}, nil, false
+		}
+	}
+	return Tracked{ID: e.ID, Kind: e.Kind, UpdatedAt: e.UpdatedAt, SHA: digest(data)}, data, true
 }
 
 // pushNew creates one note or file; it touches no shared state, so several

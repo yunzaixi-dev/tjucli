@@ -213,7 +213,8 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, header m
 			} `json:"error"`
 		}
 		data, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
-		id := "api_error"
+		// A response that is not the API's JSON came from a proxy or the edge.
+		id := fmt.Sprintf("http_%d", res.StatusCode)
 		if json.Unmarshal(data, &envelope) == nil && envelope.Error.ID != "" {
 			id = envelope.Error.ID
 		}
