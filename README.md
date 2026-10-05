@@ -16,6 +16,22 @@ curl -fsSL https://tjuclaw-release.zaixi.dev/cli/install.sh | sh
 On Windows, in PowerShell: `irm https://tjuclaw-release.zaixi.dev/cli/install.ps1 | iex`.
 See [WORKSPACES.md](WORKSPACES.md) to connect and allow remote terminals.
 
+It also works on your knowledge base like a git checkout, so you and other
+agents (Claude Code, Codex, …) can edit notes and files with ordinary tools:
+
+```bash
+tjuclaw login                      # confirm the shown code in the browser
+tjuclaw clone "课程笔记" notes && cd notes
+tjuclaw status && tjuclaw diff
+tjuclaw push                       # or: tjuclaw pull
+```
+
+Notes are Markdown files, folders are directories, files (PDF, images, .xlsx…)
+keep their bytes. Every change carries the version it was based on, so edits
+made elsewhere are reported as conflicts, never overwritten. For unattended
+use, set `TJUCLAW_TOKEN`. Agents can load the skill in
+[skills/tjuclaw-library/SKILL.md](skills/tjuclaw-library/SKILL.md).
+
 ## Installation & Build
 
 Requires Go 1.26+.

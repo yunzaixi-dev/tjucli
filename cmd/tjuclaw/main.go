@@ -81,6 +81,9 @@ func (r runner) run(ctx context.Context, args []string) int {
 	if args[0] == "update" {
 		return r.update(ctx, args[1:])
 	}
+	if libraryCommands[args[0]] {
+		return r.library(ctx, dir, args)
+	}
 	if args[0] == "workspace" {
 		return r.workspace(dir, args[1:])
 	}
