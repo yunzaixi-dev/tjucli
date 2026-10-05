@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/yunzaixi-dev/tjucli/internal/account"
 	"github.com/yunzaixi-dev/tjucli/internal/librarysync"
@@ -20,7 +21,7 @@ import (
 // Another agent can do the same with TJUCLAW_TOKEN instead of signing in.
 
 var libraryCommands = map[string]bool{
-	"login": true, "logout": true, "whoami": true, "libraries": true,
+	"login": true, "logout": true, "whoami": true, "libraries": true, "init": true,
 	"clone": true, "status": true, "diff": true, "pull": true, "push": true, "resolve": true,
 }
 
@@ -130,6 +131,25 @@ func (r runner) library(ctx context.Context, dir string, args []string) int {
 			_, _ = fmt.Fprintf(r.errOut, "%s  %s%s\n", lib.ID, lib.Name, role)
 		}
 		return r.respond(map[string]any{"libraries": libs}, "")
+	case "init":
+		if len(args) < 2 || len(args) > 3 {
+			_, _ = fmt.Fprintln(r.errOut, "用法：tjuclaw init <新知识库名称> [目录]")
+			return r.respond(nil, "usage_required")
+		}
+		client, err := r.client(dir)
+		if err != nil {
+			return r.fail(err)
+		}
+		target := args[1]
+		if len(args) == 3 {
+			target = args[2]
+		}
+		copy, err := librarysync.Init(ctx, client, args[1], target)
+		if err != nil {
+			return r.fail(err)
+		}
+		_, _ = fmt.Fprintf(r.errOut, "已新建知识库「%s」，工作副本在 %s。放入文件后运行 tjuclaw push。\n", args[1], copy.Root)
+		return r.respond(map[string]any{"root": copy.Root, "library_id": copy.State.LibraryID, "library": args[1]}, "")
 	case "clone":
 		if len(args) < 2 || len(args) > 3 {
 			_, _ = fmt.Fprintln(r.errOut, "用法：tjuclaw clone <知识库名称或 ID> [目录]")
@@ -195,7 +215,16 @@ func (r runner) library(ctx context.Context, dir string, args []string) int {
 			}
 			dryRun = true
 		}
-		res, err := copy.Push(ctx, dryRun)
+		last := time.Time{}
+		res, err := copy.Push(ctx, dryRun, func(done, total int) {
+			if done == total || time.Since(last) > time.Second {
+				last = time.Now()
+				_, _ = fmt.Fprintf(r.errOut, "\r推送中 %d/%d", done, total)
+				if done == total {
+					_, _ = fmt.Fprintln(r.errOut)
+				}
+			}
+		})
 		if err != nil {
 			return r.fail(err)
 		}
@@ -348,6 +377,12 @@ func (r runner) printPush(res librarysync.PushResult) {
 	}
 	for _, ch := range res.Skipped {
 		_, _ = fmt.Fprintf(r.errOut, "  跳过  %s（%s）\n", ch.Path, ch.Note)
+	}
+	for _, f := range res.Failed {
+		_, _ = fmt.Fprintf(r.errOut, "  失败  %s（%s）\n", f.Path, f.Error)
+	}
+	if len(res.Failed) > 0 {
+		_, _ = fmt.Fprintln(r.errOut, "失败的项目未推送，其余已完成；处理后可再次运行 tjuclaw push。")
 	}
 }
 

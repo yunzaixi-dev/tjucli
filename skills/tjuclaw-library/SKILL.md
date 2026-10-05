@@ -27,6 +27,7 @@ print it, write it into files, or commit it.
 ```bash
 tjuclaw libraries                     # id and name of each library
 tjuclaw clone "课程笔记" notes          # by name or id, into ./notes
+tjuclaw init "新知识库" ./folder        # or: create a library from a folder of files
 cd notes
 # … edit, add, move or delete files …
 tjuclaw status                        # what changed since the last sync
@@ -48,8 +49,12 @@ Layout of a working copy:
 
 Changes:
 
-- A new `.md` file becomes a note; any other new file is uploaded as a file.
-  A new directory becomes a folder.
+- A new `.md` file becomes a note (Markdown over 200,000 characters is kept as a
+  file); any other new file is uploaded as a file. A new directory becomes a
+  folder. Obsidian embeds such as `![[image.png]]` show the library's image.
+- `push` goes on past an item the library refuses and lists it under
+  `failed`; it saves progress as it goes, so re-running an interrupted push
+  sends only what is left.
 - Moving or renaming a file keeps its identity (detected by identical content);
   do not change content and move in the same step if you want it kept as a move.
 - Deleting a file deletes the entry. A folder is deleted only once it is empty

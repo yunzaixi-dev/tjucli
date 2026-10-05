@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/yunzaixi-dev/tjucli/internal/account"
@@ -35,7 +36,7 @@ const (
 	stateFile     = "state.json"
 	baseDir       = "base"      // last-synced text of notes, for diff and merges
 	conflictDir   = "conflicts" // remote versions that clashed with local edits
-	maxNoteBytes  = 200 << 10
+	maxNoteRunes  = 200000      // the library's note length; longer Markdown is kept as a file
 	maxFileBytes  = 8 << 20
 	KindNote      = "note"
 	KindRichText  = "rich_text"
@@ -355,6 +356,7 @@ type localFile struct {
 	path string
 	sha  string
 	size int64
+	long bool // Markdown that does not fit in a note
 }
 
 // scan lists local files and directories, skipping .tjuclaw and any hidden
@@ -387,7 +389,7 @@ func (c *Copy) scan() (map[string]localFile, map[string]bool, error) {
 		if err != nil {
 			return err
 		}
-		files[rel] = localFile{path: rel, sha: digest(data), size: int64(len(data))}
+		files[rel] = localFile{path: rel, sha: digest(data), size: int64(len(data)), long: isNoteFile(rel) && !noteFits(data)}
 		return nil
 	})
 	return files, dirs, err
@@ -463,8 +465,11 @@ func (c *Copy) Status() ([]Change, error) {
 			changes = append(changes, ch)
 			continue
 		}
+		if kind == KindNote && files[p].long {
+			kind = KindFile // too long for a note: kept as a Markdown file
+		}
 		ch := Change{Op: "added", Path: p, Kind: kind}
-		if kind == KindNote && files[p].size > maxNoteBytes || kind == KindFile && files[p].size > maxFileBytes {
+		if kind == KindFile && files[p].size > maxFileBytes {
 			ch.Note = "too_large"
 		}
 		if files[p].size == 0 && kind == KindFile {
@@ -517,6 +522,38 @@ func Clone(ctx context.Context, client *account.Client, lib Library, dir string)
 	}
 	res, err := c.Pull(ctx)
 	return c, res, err
+}
+
+// Init creates a library and makes dir its working copy. dir may already hold
+// files: they are new to the library, and the next push sends them.
+func Init(ctx context.Context, client *account.Client, name, dir string) (*Copy, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(filepath.Join(abs, StateDir, stateFile)); err == nil {
+		return nil, errors.New("already_a_working_copy")
+	}
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Library Library `json:"library"`
+	}
+	if err := client.Do(ctx, "POST", "/libraries", map[string]string{"name": name}, nil, &out); err != nil {
+		return nil, err
+	}
+	if out.Library.ID == "" {
+		return nil, errors.New("api_error")
+	}
+	c := &Copy{Root: abs, client: client, State: State{
+		Version: stateVersion, API: client.API, LibraryID: out.Library.ID, LibraryName: name, Entries: map[string]Tracked{},
+	}}
+	// The new library's own starter entries come down; the local files stay new.
+	if _, err := c.Pull(ctx); err != nil {
+		return c, err
+	}
+	return c, c.save()
 }
 
 type PullResult struct {
@@ -688,13 +725,28 @@ func (c *Copy) Pull(ctx context.Context) (PullResult, error) {
 // --- push ----------------------------------------------------------------------
 
 type PushResult struct {
-	Created   []string `json:"created"`
-	Updated   []string `json:"updated"`
-	Moved     []string `json:"moved"`
-	Deleted   []string `json:"deleted"`
-	Conflicts []string `json:"conflicts"`
-	Skipped   []Change `json:"skipped"`
+	Created   []string  `json:"created"`
+	Updated   []string  `json:"updated"`
+	Moved     []string  `json:"moved"`
+	Deleted   []string  `json:"deleted"`
+	Conflicts []string  `json:"conflicts"`
+	Skipped   []Change  `json:"skipped"`
+	Failed    []Failure `json:"failed"`
 }
+
+// Failure is one item the API refused; the rest of the push went on.
+type Failure struct {
+	Path  string `json:"path"`
+	Error string `json:"error"`
+}
+
+// Progress reports how many of the items being sent are done.
+type Progress func(done, total int)
+
+const (
+	pushWorkers    = 4
+	saveEveryItems = 20
+)
 
 func contentType(name string) string {
 	if t := mime.TypeByExtension(strings.ToLower(filepath.Ext(name))); t != "" {
@@ -749,214 +801,330 @@ func validText(data []byte) bool {
 	return utf8.Valid(data) && !strings.ContainsRune(string(data), 0)
 }
 
+// noteFits reports whether text can be a note: valid UTF-8 within the
+// library's note length. Longer Markdown is kept as a file instead.
+func noteFits(data []byte) bool {
+	return validText(data) && utf8.RuneCount(data) <= maxNoteRunes
+}
+
+// fatal is an error that stops the whole push: signed out, offline or
+// canceled. Anything else concerns one item, which is reported and skipped.
+func fatal(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	var remote *account.RemoteError
+	if errors.As(err, &remote) {
+		return remote.Status == 401 || remote.Status == 403 || remote.Status >= 500 && remote.Status != 503
+	}
+	return true // transport errors: the API is unreachable
+}
+
 // Push sends local changes. Each change carries the version it was based on;
-// a remote change since then is a conflict and that path is left unsent.
-func (c *Copy) Push(ctx context.Context, dryRun bool) (PushResult, error) {
-	res := PushResult{Created: []string{}, Updated: []string{}, Moved: []string{}, Deleted: []string{}, Conflicts: []string{}, Skipped: []Change{}}
+// a remote change since then is a conflict and that path is left unsent. A
+// refused item is reported in Failed and the push goes on. Progress is
+// saved as it goes, so an interrupted push resumes without duplicates.
+func (c *Copy) Push(ctx context.Context, dryRun bool, progress Progress) (PushResult, error) {
+	res := PushResult{Created: []string{}, Updated: []string{}, Moved: []string{}, Deleted: []string{}, Conflicts: []string{}, Skipped: []Change{}, Failed: []Failure{}}
 	changes, err := c.Status()
 	if err != nil {
 		return res, err
 	}
-	if dryRun {
-		for _, ch := range changes {
-			if ch.Note != "" {
-				res.Skipped = append(res.Skipped, ch)
-			}
+	var work []Change
+	for _, ch := range changes {
+		switch {
+		case ch.Note == "conflict":
+			res.Conflicts = append(res.Conflicts, ch.Path)
+		case ch.Note != "":
+			res.Skipped = append(res.Skipped, ch)
+		default:
+			work = append(work, ch)
 		}
+	}
+	if dryRun {
 		return res, nil
 	}
 	defer func() { _ = c.save() }()
-	conflict := func(p string, err error) bool {
+	var mu sync.Mutex // guards res, c.State and the save counter in the upload phase
+	done, total, sinceSave := 0, len(work), 0
+	step := func() {
+		done++
+		if sinceSave++; sinceSave >= saveEveryItems {
+			sinceSave = 0
+			_ = c.save()
+		}
+		if progress != nil {
+			progress(done, total)
+		}
+	}
+	// handle records an item's error; it returns the error only when fatal.
+	handle := func(p string, err error) error {
+		if err == nil {
+			return nil
+		}
 		if account.IsCode(err, "entry_conflict") {
 			res.Conflicts = append(res.Conflicts, p)
-			return true
+			return nil
 		}
-		return false
+		if fatal(ctx, err) {
+			return fmt.Errorf("%s: %w", p, err)
+		}
+		var remote *account.RemoteError
+		id := err.Error()
+		if errors.As(err, &remote) {
+			id = remote.ID
+		}
+		res.Failed = append(res.Failed, Failure{Path: p, Error: id})
+		return nil
 	}
-	// New folders, including empty ones.
-	for _, ch := range changes {
+
+	// 1. Folders, parents before children, including empty ones.
+	for _, ch := range work {
 		if ch.Op == "added" && ch.Kind == KindFolder {
 			if _, err := c.parentFor(ctx, ch.Path, &res); err != nil {
-				return res, fmt.Errorf("%s: %w", ch.Path, err)
+				if err := handle(ch.Path+"/", err); err != nil {
+					return res, err
+				}
 			}
+			step()
 		}
 	}
-	for _, ch := range changes {
-		if ch.Note != "" && ch.Note != "conflict" {
-			res.Skipped = append(res.Skipped, ch)
+	// 2. Moves and edits, one at a time.
+	for _, ch := range work {
+		var err error
+		switch ch.Op {
+		case "moved":
+			err = c.pushMove(ctx, ch, &res)
+		case "modified":
+			err = c.pushEdit(ctx, ch, &res)
+		default:
 			continue
 		}
-		if ch.Note == "conflict" {
-			res.Conflicts = append(res.Conflicts, ch.Path)
-			continue
-		}
-		switch {
-		case ch.Op == "moved":
-			t := c.State.Entries[ch.From]
-			parent, err := c.parentFor(ctx, path.Dir(ch.Path), &res)
-			if err != nil {
-				return res, err
-			}
-			title := path.Base(ch.Path)
-			if t.Kind != KindFile {
-				title = noteTitle(title)
-			}
-			var out struct {
-				Entry Entry `json:"entry"`
-			}
-			err = c.client.Do(ctx, "PATCH", "/entries/"+url.PathEscape(t.ID), map[string]any{
-				"title": title, "parent_id": parent, "expected_updated_at": t.UpdatedAt,
-			}, nil, &out)
-			if conflict(ch.Path, err) {
-				continue
-			}
-			if err != nil {
-				return res, fmt.Errorf("%s: %w", ch.Path, err)
-			}
-			delete(c.State.Entries, ch.From)
-			t.UpdatedAt = out.Entry.UpdatedAt
-			c.State.Entries[ch.Path] = t
-			res.Moved = append(res.Moved, ch.From+" -> "+ch.Path)
-		case ch.Op == "modified":
-			t := c.State.Entries[ch.Path]
-			data, err := os.ReadFile(c.abs(ch.Path))
-			if err != nil {
-				return res, err
-			}
-			var out struct {
-				Entry Entry `json:"entry"`
-			}
-			if t.Kind == KindFile {
-				if len(data) == 0 || len(data) > maxFileBytes {
-					res.Skipped = append(res.Skipped, Change{Op: ch.Op, Path: ch.Path, Kind: t.Kind, Note: "too_large"})
-					continue
-				}
-				err = c.client.Do(ctx, "PUT", "/entries/"+url.PathEscape(t.ID)+"/file", data,
-					map[string]string{"X-TJUClaw-Expected-Updated-At": t.UpdatedAt, "Content-Type": contentType(ch.Path)}, &out)
-			} else {
-				if !validText(data) || len(data) > maxNoteBytes {
-					res.Skipped = append(res.Skipped, Change{Op: ch.Op, Path: ch.Path, Kind: t.Kind, Note: "not_text"})
-					continue
-				}
-				err = c.client.Do(ctx, "PATCH", "/entries/"+url.PathEscape(t.ID), map[string]any{
-					"body": string(data), "expected_updated_at": t.UpdatedAt,
-				}, nil, &out)
-			}
-			if conflict(ch.Path, err) {
-				continue
-			}
-			if err != nil {
-				return res, fmt.Errorf("%s: %w", ch.Path, err)
-			}
-			t.UpdatedAt, t.SHA = out.Entry.UpdatedAt, digest(data)
-			c.State.Entries[ch.Path] = t
-			if t.Kind != KindFile {
-				_ = c.writeBase(t.ID, data)
-			}
-			res.Updated = append(res.Updated, ch.Path)
-		case ch.Op == "added" && ch.Kind != KindFolder:
-			parent, err := c.parentFor(ctx, path.Dir(ch.Path), &res)
-			if err != nil {
-				return res, err
-			}
-			data, err := os.ReadFile(c.abs(ch.Path))
-			if err != nil {
-				return res, err
-			}
-			var out struct {
-				Entry Entry `json:"entry"`
-			}
-			if ch.Kind == KindNote {
-				if !validText(data) {
-					res.Skipped = append(res.Skipped, Change{Op: ch.Op, Path: ch.Path, Kind: ch.Kind, Note: "not_text"})
-					continue
-				}
-				body := map[string]any{"kind": KindNote, "title": noteTitle(path.Base(ch.Path)), "body": string(data)}
-				if parent != "" {
-					body["parent_id"] = parent
-				}
-				err = c.client.Do(ctx, "POST", "/libraries/"+url.PathEscape(c.State.LibraryID)+"/entries", body, nil, &out)
-			} else {
-				fields := map[string]string{}
-				if parent != "" {
-					fields["parent_id"] = parent
-				}
-				form, ferr := account.NewUpload(path.Base(ch.Path), contentType(ch.Path), data, fields)
-				if ferr != nil {
-					return res, ferr
-				}
-				err = c.client.Do(ctx, "POST", "/libraries/"+url.PathEscape(c.State.LibraryID)+"/files", form, nil, &out)
-			}
-			if err != nil {
-				return res, fmt.Errorf("%s: %w", ch.Path, err)
-			}
-			c.State.Entries[ch.Path] = Tracked{ID: out.Entry.ID, Kind: out.Entry.Kind, UpdatedAt: out.Entry.UpdatedAt, SHA: digest(data)}
-			if ch.Kind == KindNote {
-				_ = c.writeBase(out.Entry.ID, data)
-			}
-			res.Created = append(res.Created, ch.Path)
-		}
-	}
-	// Deletions last: an entry edited remotely since the last sync is kept.
-	for _, ch := range changes {
-		if ch.Op != "deleted" || ch.Kind == KindFolder || ch.Note != "" {
-			continue
-		}
-		t := c.State.Entries[ch.Path]
-		remote, err := c.remoteEntry(ctx, t.ID)
-		if account.IsCode(err, "entry_not_found") {
-			delete(c.State.Entries, ch.Path)
-			continue
-		}
-		if err != nil {
+		if err := handle(ch.Path, err); err != nil {
 			return res, err
 		}
-		if remote.UpdatedAt != t.UpdatedAt {
-			res.Conflicts = append(res.Conflicts, ch.Path)
+		step()
+	}
+	// 3. New notes and files, a few at a time.
+	var adds []Change
+	for _, ch := range work {
+		if ch.Op == "added" && ch.Kind != KindFolder {
+			adds = append(adds, ch)
+		}
+	}
+	jobs := make(chan Change)
+	var fatalErr error
+	var wg sync.WaitGroup
+	for range pushWorkers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ch := range jobs {
+				mu.Lock()
+				parent, perr := c.parentFor(ctx, path.Dir(ch.Path), &res)
+				mu.Unlock()
+				var tracked Tracked
+				var data []byte
+				err := perr
+				if err == nil {
+					tracked, data, err = c.pushNew(ctx, ch, parent)
+				}
+				mu.Lock()
+				if err == nil {
+					c.State.Entries[ch.Path] = tracked
+					if tracked.Kind == KindNote {
+						_ = c.writeBase(tracked.ID, data)
+					}
+					res.Created = append(res.Created, ch.Path)
+				} else if ferr := handle(ch.Path, err); ferr != nil && fatalErr == nil {
+					fatalErr = ferr
+				}
+				step()
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, ch := range adds {
+		mu.Lock()
+		stop := fatalErr != nil
+		mu.Unlock()
+		if stop {
+			break
+		}
+		jobs <- ch
+	}
+	close(jobs)
+	wg.Wait()
+	if fatalErr != nil {
+		return res, fatalErr
+	}
+	// 4. Deletions last: an entry edited remotely since the last sync is kept.
+	for _, ch := range work {
+		if ch.Op != "deleted" || ch.Kind == KindFolder {
 			continue
 		}
-		if err := c.client.Do(ctx, "DELETE", "/entries/"+url.PathEscape(t.ID), nil, nil, nil); err != nil && !account.IsCode(err, "entry_not_found") {
-			return res, fmt.Errorf("%s: %w", ch.Path, err)
+		if err := handle(ch.Path, c.pushDelete(ctx, ch, &res)); err != nil {
+			return res, err
 		}
-		delete(c.State.Entries, ch.Path)
-		_ = os.Remove(c.basePath(t.ID))
-		res.Deleted = append(res.Deleted, ch.Path)
+		step()
 	}
 	// A folder is deleted only once nothing is left in it remotely, so a
 	// removed directory never takes remote-only content with it.
 	var folderDeletes []string
-	for _, ch := range changes {
+	for _, ch := range work {
 		if ch.Op == "deleted" && ch.Kind == KindFolder {
 			folderDeletes = append(folderDeletes, ch.Path)
 		}
 	}
 	sort.Slice(folderDeletes, func(i, j int) bool { return len(folderDeletes[i]) > len(folderDeletes[j]) })
-	if len(folderDeletes) > 0 {
-		for _, p := range folderDeletes {
-			entries, err := c.remoteEntries(ctx)
-			if err != nil {
+	for _, p := range folderDeletes {
+		entries, err := c.remoteEntries(ctx)
+		if err != nil {
+			return res, err
+		}
+		t := c.State.Entries[p]
+		empty := true
+		for _, e := range entries {
+			if e.ParentID == t.ID {
+				empty = false
+				break
+			}
+		}
+		if !empty {
+			res.Skipped = append(res.Skipped, Change{Op: "deleted", Path: p, Kind: KindFolder, Note: "folder_not_empty_remotely"})
+			step()
+			continue
+		}
+		if err := c.client.Do(ctx, "DELETE", "/folders/"+url.PathEscape(t.ID), nil, nil, nil); err != nil && !account.IsCode(err, "folder_not_found") {
+			if err := handle(p+"/", err); err != nil {
 				return res, err
 			}
-			t := c.State.Entries[p]
-			empty := true
-			for _, e := range entries {
-				if e.ParentID == t.ID {
-					empty = false
-					break
-				}
-			}
-			if !empty {
-				res.Skipped = append(res.Skipped, Change{Op: "deleted", Path: p, Kind: KindFolder, Note: "folder_not_empty_remotely"})
-				continue
-			}
-			if err := c.client.Do(ctx, "DELETE", "/folders/"+url.PathEscape(t.ID), nil, nil, nil); err != nil && !account.IsCode(err, "folder_not_found") {
-				return res, fmt.Errorf("%s: %w", p, err)
-			}
-			delete(c.State.Entries, p)
-			res.Deleted = append(res.Deleted, p+"/")
+			step()
+			continue
 		}
+		delete(c.State.Entries, p)
+		res.Deleted = append(res.Deleted, p+"/")
+		step()
 	}
 	return res, nil
+}
+
+func (c *Copy) pushMove(ctx context.Context, ch Change, res *PushResult) error {
+	t := c.State.Entries[ch.From]
+	parent, err := c.parentFor(ctx, path.Dir(ch.Path), res)
+	if err != nil {
+		return err
+	}
+	title := path.Base(ch.Path)
+	if t.Kind != KindFile {
+		title = noteTitle(title)
+	}
+	var out struct {
+		Entry Entry `json:"entry"`
+	}
+	if err := c.client.Do(ctx, "PATCH", "/entries/"+url.PathEscape(t.ID), map[string]any{
+		"title": title, "parent_id": parent, "expected_updated_at": t.UpdatedAt,
+	}, nil, &out); err != nil {
+		return err
+	}
+	delete(c.State.Entries, ch.From)
+	t.UpdatedAt = out.Entry.UpdatedAt
+	c.State.Entries[ch.Path] = t
+	res.Moved = append(res.Moved, ch.From+" -> "+ch.Path)
+	return nil
+}
+
+func (c *Copy) pushEdit(ctx context.Context, ch Change, res *PushResult) error {
+	t := c.State.Entries[ch.Path]
+	data, err := os.ReadFile(c.abs(ch.Path))
+	if err != nil {
+		return err
+	}
+	var out struct {
+		Entry Entry `json:"entry"`
+	}
+	if t.Kind == KindFile {
+		if len(data) == 0 || len(data) > maxFileBytes {
+			res.Skipped = append(res.Skipped, Change{Op: ch.Op, Path: ch.Path, Kind: t.Kind, Note: "too_large"})
+			return nil
+		}
+		err = c.client.Do(ctx, "PUT", "/entries/"+url.PathEscape(t.ID)+"/file", data,
+			map[string]string{"X-TJUClaw-Expected-Updated-At": t.UpdatedAt, "Content-Type": contentType(ch.Path)}, &out)
+	} else {
+		if !noteFits(data) {
+			res.Skipped = append(res.Skipped, Change{Op: ch.Op, Path: ch.Path, Kind: t.Kind, Note: "too_large"})
+			return nil
+		}
+		err = c.client.Do(ctx, "PATCH", "/entries/"+url.PathEscape(t.ID), map[string]any{
+			"body": string(data), "expected_updated_at": t.UpdatedAt,
+		}, nil, &out)
+	}
+	if err != nil {
+		return err
+	}
+	t.UpdatedAt, t.SHA = out.Entry.UpdatedAt, digest(data)
+	c.State.Entries[ch.Path] = t
+	if t.Kind != KindFile {
+		_ = c.writeBase(t.ID, data)
+	}
+	res.Updated = append(res.Updated, ch.Path)
+	return nil
+}
+
+// pushNew creates one note or file; it touches no shared state, so several
+// run at once.
+func (c *Copy) pushNew(ctx context.Context, ch Change, parent string) (Tracked, []byte, error) {
+	data, err := os.ReadFile(c.abs(ch.Path))
+	if err != nil {
+		return Tracked{}, nil, err
+	}
+	var out struct {
+		Entry Entry `json:"entry"`
+	}
+	if ch.Kind == KindNote {
+		body := map[string]any{"kind": KindNote, "title": noteTitle(path.Base(ch.Path)), "body": string(data)}
+		if parent != "" {
+			body["parent_id"] = parent
+		}
+		err = c.client.Do(ctx, "POST", "/libraries/"+url.PathEscape(c.State.LibraryID)+"/entries", body, nil, &out)
+	} else {
+		fields := map[string]string{}
+		if parent != "" {
+			fields["parent_id"] = parent
+		}
+		form, ferr := account.NewUpload(path.Base(ch.Path), contentType(ch.Path), data, fields)
+		if ferr != nil {
+			return Tracked{}, nil, ferr
+		}
+		err = c.client.Do(ctx, "POST", "/libraries/"+url.PathEscape(c.State.LibraryID)+"/files", form, nil, &out)
+	}
+	if err != nil {
+		return Tracked{}, nil, err
+	}
+	return Tracked{ID: out.Entry.ID, Kind: out.Entry.Kind, UpdatedAt: out.Entry.UpdatedAt, SHA: digest(data)}, data, nil
+}
+
+func (c *Copy) pushDelete(ctx context.Context, ch Change, res *PushResult) error {
+	t := c.State.Entries[ch.Path]
+	remote, err := c.remoteEntry(ctx, t.ID)
+	if account.IsCode(err, "entry_not_found") {
+		delete(c.State.Entries, ch.Path)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if remote.UpdatedAt != t.UpdatedAt {
+		res.Conflicts = append(res.Conflicts, ch.Path)
+		return nil
+	}
+	if err := c.client.Do(ctx, "DELETE", "/entries/"+url.PathEscape(t.ID), nil, nil, nil); err != nil && !account.IsCode(err, "entry_not_found") {
+		return err
+	}
+	delete(c.State.Entries, ch.Path)
+	_ = os.Remove(c.basePath(t.ID))
+	res.Deleted = append(res.Deleted, ch.Path)
+	return nil
 }
 
 // Resolve accepts the local file as the merge of a conflict: the next push

@@ -24,6 +24,7 @@ tjuclaw login                      # confirm the shown code in the browser
 tjuclaw clone "课程笔记" notes && cd notes
 tjuclaw status && tjuclaw diff
 tjuclaw push                       # or: tjuclaw pull
+tjuclaw init "Obsidian 笔记" ~/vault && tjuclaw push -C ~/vault   # import a folder
 ```
 
 Notes are Markdown files, folders are directories, files (PDF, images, .xlsx…)
