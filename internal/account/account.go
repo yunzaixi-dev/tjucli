@@ -24,7 +24,21 @@ import (
 	"time"
 )
 
-const DefaultAPI = "https://app.tjuclaw.cloud/api"
+// DefaultAPI is the API's direct edge address. The web app's own /api passes
+// through a page function that gives up after about 15 s, which a large file
+// on a slow uplink exceeds; this address has no such limit.
+const DefaultAPI = "https://auth.tjuclaw.cloud/api"
+
+// legacyAPI is the address earlier versions stored; it reaches the same API.
+const legacyAPI = "https://app.tjuclaw.cloud/api"
+
+// CanonicalAPI maps an older stored address to the one now used.
+func CanonicalAPI(api string) string {
+	if strings.TrimRight(api, "/") == legacyAPI {
+		return DefaultAPI
+	}
+	return api
+}
 
 var (
 	ErrSignedOut = errors.New("signed_out")
@@ -98,6 +112,7 @@ func Load(dir string) (Credentials, error) {
 	if json.Unmarshal(data, &c) != nil || c.Token == "" || checkBase(c.API) != nil {
 		return Credentials{}, ErrSignedOut
 	}
+	c.API = CanonicalAPI(c.API)
 	return c, nil
 }
 

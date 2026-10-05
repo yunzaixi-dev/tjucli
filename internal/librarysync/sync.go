@@ -149,6 +149,7 @@ func Find(dir string, client *account.Client) (*Copy, error) {
 			if st.Entries == nil {
 				st.Entries = map[string]Tracked{}
 			}
+			st.API = account.CanonicalAPI(st.API)
 			if client != nil && st.API != "" && st.API != client.API {
 				return nil, errors.New("working_copy_api_mismatch")
 			}

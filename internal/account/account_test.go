@@ -36,6 +36,14 @@ func TestCredentialsAreOwnerOnlyAndTheEnvironmentWins(t *testing.T) {
 	if c, err := Load(dir); err != nil || c.API != "http://127.0.0.1:8080" {
 		t.Fatalf("loopback API: %+v %v", c, err)
 	}
+	// A login saved by an earlier version keeps working at the new address.
+	t.Setenv("TJUCLAW_TOKEN", "")
+	if err := Save(dir, Credentials{API: "https://app.tjuclaw.cloud/api", Token: "tjc_old"}); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := Load(dir); err != nil || c.API != DefaultAPI {
+		t.Fatalf("legacy address: %+v %v", c, err)
+	}
 	if err := Remove(dir); err != nil || Remove(dir) != nil {
 		t.Fatal("remove")
 	}
